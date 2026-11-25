@@ -130,7 +130,7 @@ def open_vcf(path: Path, mode: str = "r", **kwargs) -> pysam.VariantFile:
         pysam.set_verbosity(previous)
 
 
-class _LazyScorer:
+class LazyScorer:
     """Load the model only if something actually needs to be computed."""
 
     def __init__(self, factory: ScorerFactory) -> None:
@@ -146,10 +146,10 @@ class _LazyScorer:
 # ---------------------------------------------------------------------------- scoring
 
 
-def _wt_scores(
+def cached_wt_scores(
     sequences: dict[str, str],
     cache: ScoreCache,
-    scorer: _LazyScorer,
+    scorer: LazyScorer,
     chunk_size: int = 256,
     progress: bool = False,
 ) -> dict[str, tuple[np.ndarray, int]]:
@@ -171,10 +171,10 @@ def _wt_scores(
     return found
 
 
-def _masked_scores(
+def cached_masked_scores(
     queries: dict[tuple[str, int], str],
     cache: ScoreCache,
-    scorer: _LazyScorer,
+    scorer: LazyScorer,
     chunk_size: int = 2048,
 ) -> dict[tuple[str, int], np.ndarray]:
     """Masked-marginal vectors for ``{(seq_hash, position): sequence}``."""
@@ -199,7 +199,7 @@ def score_variants(
     masked: bool = True,
 ) -> None:
     """Fill the score fields of variants whose status is OK (in place)."""
-    scorer = _LazyScorer(scorer_factory)
+    scorer = LazyScorer(scorer_factory)
     ok = [v for v in variants if v.status is VariantStatus.OK]
     sequences = {}
     for variant in ok:
@@ -208,7 +208,7 @@ def score_variants(
         variant.protein_length = len(protein.sequence)
         sequences[protein.seq_hash] = protein.sequence
 
-    wt = _wt_scores(sequences, cache, scorer)
+    wt = cached_wt_scores(sequences, cache, scorer)
     for variant in ok:
         matrix, n_windows = wt[variant.seq_hash]
         alt = AA_INDEX[variant.consequence.alt_aa]
@@ -218,7 +218,7 @@ def score_variants(
     if not masked:
         return
     queries = {(v.seq_hash, v.consequence.protein_pos): sequences[v.seq_hash] for v in ok}
-    mm = _masked_scores(queries, cache, scorer)
+    mm = cached_masked_scores(queries, cache, scorer)
     for variant in ok:
         vector = mm[(variant.seq_hash, variant.consequence.protein_pos)]
         variant.masked_marginal = float(vector[AA_INDEX[variant.consequence.alt_aa]])
@@ -598,7 +598,9 @@ def precompute(
         len(todo),
     )
     start = time.perf_counter()
-    _wt_scores(todo, cache, _LazyScorer(scorer_factory), chunk_size=chunk_size, progress=progress)
+    cached_wt_scores(
+        todo, cache, LazyScorer(scorer_factory), chunk_size=chunk_size, progress=progress
+    )
     return PrecomputeResult(
         n_transcripts=len(proteins),
         n_unique_proteins=len(sequences),

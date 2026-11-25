@@ -68,3 +68,7 @@ outputs/
 # --- Small hand-made test fixtures ARE committed ---
 !tests/data/
 !tests/data/**
+
+# --- Aggregate benchmark metrics ARE committed ---
+!benchmarks/results/
+!benchmarks/results/**
