@@ -5,9 +5,10 @@
 
 **Score missense variants in any species with protein language models, straight from a VCF.**
 
-> **Status: alpha (MVP).** The pipeline works end to end and its coordinate handling is
-> tested, but the scores have **not been validated yet** on benchmarks (Phase 3). Do not use
-> them for breeding or clinical decisions.
+> **Status: alpha.** The pipeline works end to end, reproduces published ESM-2 results and
+> separates known dog disease variants from common dog variants (see [Validation](#validation)).
+> The scores measure how disruptive a substitution looks to the protein, **not** whether it
+> causes disease: do not use them alone for breeding or clinical decisions.
 
 ## Why
 
@@ -103,7 +104,11 @@ ref_aa alt_aa protein_length n_windows wt_marginal masked_marginal status`
 | Annotate 127,270 dog variants (chr38, 0–5 Mb; 1,689 missense consequences) | 137 s on first run, 13 s when the scores are cached (1.4 GB RAM) |
 | Proteome translation | ~10 s (after the one-off BGZF conversion of the genome, ~3 min) |
 
-## Validation so far
+## Validation
+
+Scripts and details: [benchmarks/README.md](benchmarks/README.md). Results: `benchmarks/results/`.
+
+**Implementation checks**
 
 - **Coordinates:** a hand-designed synthetic genome (`tests/synthetic.py`) with genes on both
   strands and codons split by introns; every designed variant is recovered with the right
@@ -111,9 +116,51 @@ ref_aa alt_aa protein_length n_windows wt_marginal masked_marginal status`
 - **Proteome:** the dog proteome translated from FASTA + GFF3 is identical to Ensembl's
   published peptides for 43,524 / 43,524 transcripts (the only exclusion is one
   selenoprotein, see limitations).
-- **Model:** with the real ESM-2 650M, the wild-type LLR is exactly 0 and a core
-  substitution in ubiquitin (I44D) scores far below a conservative one (I44V).
-- **Benchmarks (ProteinGym, dog disease variants): not done yet** (Phase 3).
+- **ProteinGym** (`benchmarks/proteingym.py`): Spearman correlation between our masked-marginal
+  scores and experimental fitness, against the value ProteinGym publishes for ESM-2 650M.
+
+| DMS assay | organism | length | mutants | ours | published |
+|---|---|---|---|---|---|
+| BLAT_ECOLX_Stiffler_2015 | *E. coli* | 286 | 4,996 | 0.732 | 0.731 |
+| KCNJ2_MOUSE_Coyote-Maestas_2022_function | mouse | 428 | 6,963 | 0.382 | 0.382 |
+| SC6A4_HUMAN_Young_2021 | human | 630 | 11,576 | 0.543 | 0.543 |
+| UBE4B_MOUSE_Starita_2013 | mouse | 1,173 | 899 | 0.459 | 0.459 |
+| NPC1_HUMAN_Erwood_2022_HEK293T | human | 1,278 | 637 | 0.695 | 0.694 |
+| BRCA1_HUMAN_Findlay_2018 | human | 1,863 | 1,837 | 0.515 | 0.515 |
+
+The last three are longer than 1022 residues and use our sliding windows.
+
+**Dog benchmark** (`benchmarks/dog_omia.py`): OMIA dog missense variants mapped to dog
+proteins, against Dog10K missense variants with allele frequency ≥ 5% among 1,872 dogs
+(UU_Cfam_GSD_1.0, annotated by omnimissense). AUROC with 95% bootstrap interval; BLOSUM62 is a
+context-free baseline (amino-acid similarity only).
+
+| causal set | common variants | n causal / common | ESM-2 masked | ESM-2 wild-type | BLOSUM62 |
+|---|---|---|---|---|---|
+| pathogenic (AVCG P/LP) | all | 49 / 521 | **0.962** (0.926–0.988) | 0.954 (0.918–0.983) | 0.678 |
+| pathogenic (AVCG P/LP) | same genes | 49 / 33 | **0.947** (0.890–0.987) | 0.934 (0.869–0.981) | 0.613 |
+| disease (P/LP + not yet classified) | all | 118 / 521 | 0.945 (0.919–0.969) | 0.943 (0.916–0.966) | 0.650 |
+| disease | same genes | 118 / 104 | 0.938 (0.904–0.966) | 0.932 (0.897–0.961) | 0.647 |
+| coat/hair **traits** | all | 15 / 521 | 0.968 (0.912–0.999) | 0.968 (0.915–0.998) | 0.728 |
+| pathogenic **vs OMIA traits** | — | 49 / 15 | 0.437 (0.282–0.593) | 0.461 (0.306–0.620) | 0.437 |
+
+How to read it:
+
+- ESM-2 scores separate known dog disease variants from common dog variants far better than
+  amino-acid similarity alone, also within the same genes.
+- **Trait variants** (coat colour, hair) look as disruptive as disease variants, and the model
+  cannot tell the two apart (AUROC 0.44, no better than chance). The score measures damage to
+  the protein, not disease. This also explains the low AUROC (0.55–0.61) reported for
+  human-mapped predictors on OMIA when "non-deleterious" (often trait) variants are the
+  negatives; our numbers are **not** directly comparable with that study.
+- Common variants are an easy negative set (selection has removed damaging alleles from high
+  frequency). Finding the causal variant among the *rare* variants of one dog is harder and
+  is not measured here. Within its own protein, the median pathogenic variant ranks at the
+  32nd percentile of all possible substitutions (wild-type marginal); only 8% fall in the
+  most damaging 10%.
+- Small sets (49 curated pathogenic variants), OMIA ascertainment bias (variants found in
+  candidate genes), and 133 of 176 OMIA records mappable to Ensembl proteins (gene symbol
+  missing or different protein numbering for the rest).
 
 ## Limitations
 

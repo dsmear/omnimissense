@@ -122,3 +122,37 @@ protein → writes them to the VCF `INFO` field.
 - `precompute`: 2,148 s (35.8 min), 12,412 residues/s, peak RAM 4.9 GB, cache 1.4 GB.
 - Demo: Ensembl 116 variation VCF, chromosome 38:0–5 Mb (127,270 records, sites only) → 0 REF mismatches, 598 records with missense, 1,689 missense consequences (128 transcripts, 52 genes), all status `ok`; 1,640 masked positions computed; 137 s first run, 13 s cached. Pearson(wt, masked) = 0.979.
 - Most damaging in the demo: ATP2B4 G833R (masked −13.3), RAB7B L122R (−13.0), KCNT2 V823E (−12.8); least: conservative I→L / L→V (+7.6/+7.7). Plausible, but **not a validation** (Phase 3).
+
+---
+
+## 2026-11-25 — Phase 3: validation
+
+### ProteinGym sanity check (`benchmarks/proteingym.py`)
+
+| Decision | Rationale |
+|---|---|
+| Data from the official Hugging Face dataset `OATML-Markslab/ProteinGym_v1` (revision `1ea2aa1…`), reference file and published scores from GitHub commit `144fe22…` | `marks.hms.harvard.edu` failed TLS verification ("unable to get local issuer certificate"); verification was not disabled. Same authors, pinned revisions. Mutant counts checked against the reference file. |
+| Compare our **masked** marginal with ProteinGym's "ESM2 (650M)" column | ProteinGym's `scoring_ESM2_substitutions.sh` uses `scoring_strategy="masked-marginals"`. |
+| 3 single-window assays (pass/fail, tolerance 0.03) + 3 assays > 1022 aa (informational) | ProteinGym scores long proteins with one window centred on the mutation (`get_optimal_window`); we average overlapping windows, so exact agreement is not expected there. |
+| **Result:** differences ≤ 0.001 on all six assays (BLAT_ECOLX 0.732 vs 0.731, KCNJ2_MOUSE 0.382 vs 0.382, SC6A4_HUMAN 0.543 vs 0.543, UBE4B_MOUSE 0.459 vs 0.459, NPC1_HUMAN 0.695 vs 0.694, BRCA1_HUMAN 0.515 vs 0.515) | Implementation matches the reference; the windowing scheme gives the same correlations as ProteinGym's on these long proteins. |
+
+### Dog benchmark (`benchmarks/dog_omia.py`)
+
+| Decision | Rationale |
+|---|---|
+| OMIA CSV downloaded **by hand** by the user (`data/omia/omia_dog_variants.csv`, 2026-11-25) | OMIA `robots.txt` disallows `/download*`, `/curate*`, `/search*` for automated agents. OMIA terms: free, cite OMIA (DOI 10.25910/2AMR-PV70) and acknowledge the Sydney Informatics Hub / AHIDA; contact the curators about co-authorship for publications relying on the MySQL dump or extended data. No OMIA data are committed; only aggregate metrics. The OMIA VCF exports ("for maintainers of other databases") were not used. |
+| Causal sets from the CSV columns actually present: `Variant Effect = missense`; **pathogenic** = AVCG `Pathogenicity Classification` P, LP or LP/P; **disease** = pathogenic + "Not currently evaluated" disease phenotypes; **trait** = coat/hair/pattern phenotypes (explicit list in the script); "Modifier of copper toxicosis" and "Out of scope" excluded | The planned "Deleterious?" column is not in the CSV export. 179 dog missense records: 64 P/LP, 114 not evaluated (of which 14 traits), 1 out of scope. |
+| Mapping by gene symbol + protein change (`XP_…:p.(R1186Q)`), reference residue must match; canonical transcript first; GSD annotation first, ROS_Cfam_1.0 as fallback | OMIA coordinates are on mixed assemblies (CanFam3.1 mostly); protein-level mapping avoids liftover. ROS fallback recovered 21 variants whose gene symbol is missing from the GSD annotation. |
+| Common set: **Dog10K** (CC-BY-4.0, Zenodo 8084059) PASS SNVs with ALT AF ≥ 5% among 1,872 dogs (breed, village, mixed; `inAnalyzedSNV`), read remotely with bcftools (`-S dogs -R cds.bed -f PASS -q 0.05:alt1 -G`, AC/AN recomputed on the subset); annotated with omnimissense on UU_Cfam_GSD_1.0 (Ensembl 116); canonical transcripts of the causal genes and of 500 random autosomal genes (seed 0) | The Dog10K BCF has genotypes but no INFO fields; it is on UU_Cfam_GSD_1.0, so the negatives run through the full omnimissense pipeline on a second assembly. Remote reads occasionally fail ("BCF read error"): one query per chromosome, cached, 3 retries. Variants both common and causal are dropped from the negatives. |
+| Bug found and fixed during the run: random genes were drawn after removing the causal genes and the Dog10K extract was cached under a name that did not reflect the gene set | When the causal set changed, a stale extract was reused (random-gene negatives dropped from 361 to 34). Now: draw from all autosomal genes first, then remove causal genes; cache keyed by a hash of the regions and threshold. |
+| BLOSUM62 added as a context-free baseline (verified identical to Biopython's matrix, 400/400 entries; Biopython not added as a dependency) | Puts the very high AUROC in context: amino-acid similarity alone reaches 0.68 (0.61 within the same genes). |
+| Extra comparison: pathogenic vs OMIA trait variants | Reproduces the negative-set definition of the Open Vet J 2025 study (OMIA "non-deleterious" variants, often traits). |
+
+### Dog results (ESM-2 650M masked marginal; Ensembl 116 GSD; Dog10K AF ≥ 5%; 494 random genes, seed 0)
+
+- OMIA: 176 dog missense records used → 133 mapped (21 via ROS_Cfam_1.0), 25 reference-residue mismatches (different protein numbering), 16 gene symbols not found, 2 without a single protein change. Sets: 49 pathogenic, 118 disease, 15 trait. 3 causal variants are also common in Dog10K and were removed from the negatives.
+- Pathogenic vs all common (49 / 521): AUROC **0.962** (0.926–0.988); same genes (49 / 33): 0.947 (0.890–0.987); BLOSUM62 0.678 / 0.613. Wild-type marginal slightly lower (0.954 / 0.934).
+- Disease vs all common (118 / 521): 0.945 (0.919–0.969); same genes 0.938.
+- Traits vs common: 0.968 — **pathogenic vs traits: 0.437 (0.282–0.593)**, same as BLOSUM62: the model measures protein disruption, not disease.
+- In-protein rank of pathogenic variants (wild-type marginal): median 32nd percentile of all possible substitutions; 8% in the most damaging 10%.
+- Interpretation and limits: common variants are an easy negative set (selection); the realistic task (causal among a dog's rare variants) is not measured; small curated set; OMIA ascertainment bias. The numbers are not comparable with the 0.55–0.61 of the human-mapping study, whose negatives were mostly trait variants; a same-set comparison with human-mapped scores is future work.
