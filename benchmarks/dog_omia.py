@@ -304,6 +304,55 @@ def extract_common_snvs(bed: Path, dogs: Path, fasta: Path, output: Path, min_af
     log.info("%d common SNVs written to %s", len(records), output)
 
 
+@dataclass
+class DogReference:
+    """UU_Cfam_GSD_1.0 (Dog10K's assembly) plus ROS_Cfam_1.0 as a gene-symbol fallback."""
+
+    fasta: Path
+    gff3: Path
+    transcripts: dict[str, Transcript]
+    genes: dict[str, list[Transcript]]
+    ros_genes: dict[str, list[Transcript]]
+    proteins: dict[str, Protein]  # GSD proteins of coding genes + ROS proteins of OMIA genes
+    ros_fasta: Path
+    ros_transcripts: dict[str, Transcript]
+
+
+def load_reference() -> DogReference:
+    gsd = Path("data/dog/gsd-ensembl-116")
+    fasta = prepare_fasta(fetch(GSD_URLS[GSD_FASTA], gsd / GSD_FASTA))
+    gff3 = fetch(GSD_URLS[GSD_GFF3], gsd / GSD_GFF3)
+    transcripts = read_transcripts(gff3)
+    genes = gene_index(transcripts)
+    proteins = build_proteome(
+        fasta, transcripts, [tx.transcript_id for txs in genes.values() for tx in txs]
+    )
+    ros = Path("data/dog/ensembl-116")
+    ros_fasta = prepare_fasta(fetch(ROS_URLS[ROS_FASTA], ros / ROS_FASTA))
+    ros_transcripts = read_transcripts(fetch(ROS_URLS[ROS_GFF3], ros / ROS_GFF3))
+    return DogReference(
+        fasta, gff3, transcripts, genes, gene_index(ros_transcripts), proteins, ros_fasta,
+        ros_transcripts,
+    )  # fmt: skip
+
+
+def causal_variants(
+    omia: list[dict[str, str]], ref: DogReference
+) -> tuple[list[ProteinVariant], dict[str, int]]:
+    """Map OMIA records to GSD proteins, falling back to ROS_Cfam_1.0 (adds ROS proteins to
+    ``ref.proteins``)."""
+    omia_genes = {r["gene"].upper() for r in omia}
+    ros_proteins = build_proteome(
+        ref.ros_fasta,
+        ref.ros_transcripts,
+        [tx.transcript_id for g in omia_genes for tx in ref.ros_genes.get(g, [])],
+    )
+    positives, counts = map_omia(omia, [(ref.genes, ref.proteins), (ref.ros_genes, ros_proteins)])
+    counts["mapped_via_ros_cfam"] = sum(p.transcript_id in ros_proteins for p in positives)
+    ref.proteins.update(ros_proteins)
+    return positives, counts
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--omia-csv", type=Path, default=Path("data/omia/omia_dog_variants.csv"))
@@ -321,32 +370,12 @@ def main() -> int:
     if not args.omia_csv.exists():
         sys.exit(f"Missing {args.omia_csv}: download it by hand, see benchmarks/README.md")
     data = args.data_dir
-    gsd = Path("data/dog/gsd-ensembl-116")
-    fasta = prepare_fasta(fetch(GSD_URLS[GSD_FASTA], gsd / GSD_FASTA))
-    gff3 = fetch(GSD_URLS[GSD_GFF3], gsd / GSD_GFF3)
     samples = fetch(DOG10K_SAMPLES, data / "dog10k_samples.txt")
-
-    transcripts = read_transcripts(gff3)
-    genes = gene_index(transcripts)
-    proteins = build_proteome(
-        fasta, transcripts, [tx.transcript_id for txs in genes.values() for tx in txs]
-    )
-
-    # ---- positives (genes missing from the GSD annotation: ROS_Cfam_1.0 as a fallback)
-    ros = Path("data/dog/ensembl-116")
-    ros_fasta = prepare_fasta(fetch(ROS_URLS[ROS_FASTA], ros / ROS_FASTA))
-    ros_transcripts = read_transcripts(fetch(ROS_URLS[ROS_GFF3], ros / ROS_GFF3))
-    ros_genes = gene_index(ros_transcripts)
+    ref = load_reference()
+    fasta, gff3, genes = ref.fasta, ref.gff3, ref.genes
     omia = read_omia(args.omia_csv)
-    omia_genes = {r["gene"].upper() for r in omia}
-    ros_proteins = build_proteome(
-        ros_fasta,
-        ros_transcripts,
-        [tx.transcript_id for g in omia_genes for tx in ros_genes.get(g, [])],
-    )
-    positives, mapping_counts = map_omia(omia, [(genes, proteins), (ros_genes, ros_proteins)])
-    mapping_counts["mapped_via_ros_cfam"] = sum(p.transcript_id in ros_proteins for p in positives)
-    proteins = {**proteins, **ros_proteins}
+    positives, mapping_counts = causal_variants(omia, ref)
+    proteins = ref.proteins
     log.info("OMIA deleterious dog missense records: %d; mapping: %s", len(omia), mapping_counts)
 
     # ---- negatives

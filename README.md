@@ -162,6 +162,44 @@ How to read it:
   candidate genes), and 133 of 176 OMIA records mappable to Ensembl proteins (gene symbol
   missing or different protein numbering for the rest).
 
+**Realistic test and comparison with the human-ortholog workaround**
+(`benchmarks/dog_realistic.py`). For 50 Dog10K dogs (49 breeds), each dog's candidates are
+the rare missense variants it carries (allele frequency < 1%; median 126 per dog). Each
+causal OMIA variant is inserted in turn among each dog's candidates and ranked. The same
+variants are also scored the way people do today without a dog tool: map the variant to the
+human ortholog (same gene, aligned residue must be identical) and use a human score: ESM-2 on
+the human protein, or AlphaMissense.
+
+| 49 pathogenic variants × 50 dogs | median rank | top-1 | top-5 | top-10 |
+|---|---|---|---|---|
+| **omnimissense** (ESM-2 on the dog protein) | 6 | 19% | 46% | 66% |
+| ESM-2 on the human ortholog | 6 | 19% | 49% | 67% |
+| AlphaMissense (human) | 4 | 26% | 60% | 75% |
+| BLOSUM62 | 40.5 | 0% | 1% | 13% |
+
+| AUROC, pathogenic vs rare variants | all variants (49 / 7,581) | scored by every method (48 / 4,180) |
+|---|---|---|
+| **omnimissense** | 0.913 | 0.882 |
+| ESM-2 on the human ortholog | 0.915 | 0.874 |
+| AlphaMissense (human) | 0.936 | 0.912 |
+
+What this says:
+
+- **Dog protein vs human protein, same model:** on the variants both can score, scoring the
+  dog's own protein is slightly but consistently better (+0.007 to +0.019 AUROC; the paired
+  95% interval is at or above zero in three of four comparisons, e.g. disease vs common
+  +0.005 to +0.032, and −0.002 to +0.026 in the fourth).
+- **Coverage:** the human workaround can score only 56% of the dogs' rare missense variants
+  and 41% of the common ones (the human residue differs or there is no human entry), but 96%
+  of the causal variants, which sit on conserved residues. Unscorable variants are mostly
+  benign, so for ranking they cost the workaround little in the dog, a species close to
+  human. omnimissense scores 100% of them.
+- **AlphaMissense** (trained with structure and population data, human only, non-commercial
+  license) ranks causal variants better than ESM-2 650M on either protein (top-10: 75% vs
+  66%); the paired AUROC difference is significant in one of four comparisons.
+- In a real dog genome, omnimissense puts the causal variant in the top 10 of ~126 rare
+  missense candidates two times out of three.
+
 ## Limitations
 
 - GFF3 must follow the Ensembl layout (`ID=gene:…`, `ID=transcript:…`), as required by

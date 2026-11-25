@@ -51,3 +51,20 @@ def bootstrap_ci(
         values.append(auroc(labels[idx], scores[idx]))
     low, high = np.percentile(values, [2.5, 97.5])
     return float(low), float(high)
+
+
+def bootstrap_diff_ci(
+    labels: np.ndarray, scores_a: np.ndarray, scores_b: np.ndarray, n: int = 2000, seed: int = 0
+) -> tuple[float, float]:
+    """95% bootstrap interval of AUROC(a) - AUROC(b) on the same variants (paired)."""
+    rng = np.random.default_rng(seed)
+    labels = np.asarray(labels, dtype=bool)
+    a = np.asarray(scores_a, dtype=np.float64)
+    b = np.asarray(scores_b, dtype=np.float64)
+    pos, neg = np.flatnonzero(labels), np.flatnonzero(~labels)
+    values = []
+    for _ in range(n):
+        idx = np.concatenate([rng.choice(pos, len(pos)), rng.choice(neg, len(neg))])
+        values.append(auroc(labels[idx], a[idx]) - auroc(labels[idx], b[idx]))
+    low, high = np.percentile(values, [2.5, 97.5])
+    return float(low), float(high)

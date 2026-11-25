@@ -71,3 +71,37 @@ reads Dog10K remotely, region by region (only the coding sequence of the selecte
   24, 187 (2023). Data: <https://zenodo.org/records/8084059> (CC-BY-4.0).
 - Ensembl release 116, *Canis lupus familiaris* German Shepherd (UU_Cfam_GSD_1.0,
   GCA_011100685.1).
+
+## 3. Dog, realistic: ranking among rare variants, and the human-ortholog workaround
+
+```bash
+uv run --group benchmarks python benchmarks/dog_realistic.py
+```
+
+Requires the OMIA CSV (section 2), a run of `dog_omia.py` (for the common-variant set) and
+these downloads (about 6.7 GB; MD5 checksums from the Zenodo records):
+
+| File | Destination | Source | License |
+|---|---|---|---|
+| `AutoAndXPAR.SNPs.bcf` + `.csi` (5.5 GB) | `data/dog10k/` | Dog10K, <https://zenodo.org/records/8084059> | CC-BY-4.0 |
+| `AlphaMissense_aa_substitutions.tsv.gz` (1.2 GB) | `data/alphamissense/` | <https://zenodo.org/records/8208688> | CC BY-NC-SA 4.0 |
+| `uniprot_human_reviewed.tsv` (12 MB) | `data/human/` | UniProt REST: `https://rest.uniprot.org/uniprotkb/stream?query=organism_id:9606+AND+reviewed:true&format=tsv&fields=accession,gene_primary,gene_synonym,sequence` | CC-BY-4.0 |
+
+- **Ranking:** 50 Dog10K breed dogs (random, seed 0). Each dog's candidates are the rare
+  missense variants it carries (PASS SNVs, ALT frequency < 1% among the 1,872 dogs, canonical
+  transcripts of autosomal coding genes). Every OMIA causal variant (pathogenic and disease
+  sets) is inserted in turn among each dog's candidates and ranked; median rank, top-1, top-5,
+  top-10.
+- **Methods:** ESM-2 650M on the dog protein (omnimissense, masked and wild-type marginal);
+  ESM-2 650M on the human ortholog (masked marginal); AlphaMissense (human); BLOSUM62.
+- **Human mapping ("mock variant"):** dog gene symbol → reviewed human UniProt entry (primary
+  name, then synonyms); global alignment (BLOSUM62, gap open −10, extend −0.5); the aligned
+  human residue must equal the dog reference residue. Proteins longer than 6,000 residues are
+  not aligned. Unmapped variants have no human score and are ranked last.
+- **AUROC:** causal vs rare and vs common variants, on all variants and on the subset scored by
+  every method, with a paired bootstrap interval for the difference between dog ESM-2 and
+  AlphaMissense.
+
+AlphaMissense: Cheng et al., *Accurate proteome-wide missense variant effect prediction with
+AlphaMissense*, Science 381, eadg7492 (2023). Predictions used only to compute aggregate
+metrics; they are not redistributed.

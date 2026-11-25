@@ -156,3 +156,27 @@ protein → writes them to the VCF `INFO` field.
 - Traits vs common: 0.968 — **pathogenic vs traits: 0.437 (0.282–0.593)**, same as BLOSUM62: the model measures protein disruption, not disease.
 - In-protein rank of pathogenic variants (wild-type marginal): median 32nd percentile of all possible substitutions; 8% in the most damaging 10%.
 - Interpretation and limits: common variants are an easy negative set (selection); the realistic task (causal among a dog's rare variants) is not measured; small curated set; OMIA ascertainment bias. The numbers are not comparable with the 0.55–0.61 of the human-mapping study, whose negatives were mostly trait variants; a same-set comparison with human-mapped scores is future work.
+
+---
+
+## 2026-11-25 — Phase 4 (follow-up 2): realistic ranking and human-ortholog comparison
+
+| Decision | Rationale |
+|---|---|
+| Dog10K SNV BCF downloaded locally (5.5 GB, MD5 verified) instead of remote queries | Approved by the user. Genome-wide rare-variant extraction needs ~180k CDS regions: ~3 h remotely with intermittent failures, minutes locally. |
+| 50 random breed dogs (seed 0); candidates = rare (ALT AF < 1% among 1,872 dogs, AC ≥ 1) PASS SNVs they carry, missense in canonical transcripts of autosomal coding genes | Simulates a diagnostic setting: rank the causal variant among the rare missense variants of a real dog genome ("spike-in" design used for human variant prioritisation). Annotation runs on a GFF3 restricted to canonical transcripts to halve the scoring work. |
+| Causal variants that a healthy Dog10K dog carries are removed from that role as candidates | Otherwise the same variant would compete with itself. |
+| Human mapping via reviewed UniProt entries (downloaded 2026-11-25) by gene symbol, Biopython global alignment (BLOSUM62, −10/−0.5), identical reference residue required; proteins > 6,000 aa skipped | Reproduces the "mock variant" approach of the 2025 study. Biopython is in a separate `benchmarks` dependency group, not a runtime dependency; CI installs all groups. |
+| Human scores: ESM-2 650M masked marginal on the human protein (same model) and AlphaMissense (CC BY-NC-SA 4.0, approved by the user; used only for aggregate metrics, not redistributed) | ESM-2 on human isolates "dog protein vs human protein"; AlphaMissense is what a practitioner using the human workaround would actually use. AlphaMissense rows are looked up by exact `(accession, "R106W")` string, so a UniProt sequence change since 2021 cannot silently shift positions. |
+| Unscored variants (no human mapping / not in AlphaMissense) are ranked last; AUROC reported on all variants and on the subset scored by every method, with a paired bootstrap interval for dog ESM-2 − AlphaMissense | Separates coverage (what the human workaround cannot score) from quality on the variants both can score. |
+| `dog_omia.py` setup refactored into `load_reference()` / `causal_variants()` | Shared with `dog_realistic.py`; re-run confirmed byte-identical dog_omia results. |
+| Bug fixed during the run: Biopython's BLOSUM62 alphabet has no `U` (selenocysteine in some human proteins) → letters outside the alphabet are replaced by `X` before alignment (same length, positions unchanged); test added | The first run crashed in the alignment step. |
+
+### Phase 4 results (50 dogs, 49 breeds; ESM-2 650M; Ensembl 116 GSD; Dog10K)
+
+- Rare candidates: 19,878 rare SNVs carried by the 50 dogs → 7,581 rare missense (canonical); median 126 per dog (range 47–609).
+- Human mapping (identical residue): 95.8% of causal, 55.9% of rare, 40.8% of common variants; AlphaMissense found for 95.8% / 55.1% / 40.5%.
+- Ranking, 49 pathogenic × 50 dogs: omnimissense median rank 6, top-10 66%; human ESM-2 6 / 67%; AlphaMissense 4 / 75%; BLOSUM62 40.5 / 13%. Disease set (118): omnimissense 8 / 57%, AlphaMissense 5 / 68%.
+- AUROC pathogenic vs rare: omnimissense 0.913 (all) / 0.882 (scored by all); human ESM-2 0.915 / 0.874; AlphaMissense 0.936 / 0.912.
+- Paired differences (scored-by-all subsets): dog − human ESM-2 = +0.008 (−0.002 to +0.026) pathogenic/rare, +0.019 (+0.002 to +0.041) pathogenic/common, +0.007 (+0.000 to +0.015) disease/rare, +0.017 (+0.005 to +0.032) disease/common. Dog ESM-2 − AlphaMissense: −0.030 (−0.077 to +0.009), −0.019 (−0.064 to +0.013), −0.033 (−0.065 to −0.003), −0.026 (−0.059 to +0.005).
+- Conclusions: (1) scoring the species' own protein gives a small, consistent gain over the human ortholog with the same model; (2) the coverage advantage is real (100% vs ~56% of rare variants) but costs the human workaround little in dogs because unmappable variants are mostly benign — it should matter more in species far from human; (3) AlphaMissense is stronger than ESM-2 650M; a stronger permissive model (VESM, MIT) is the most promising lever.
