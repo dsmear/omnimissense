@@ -1,6 +1,6 @@
 [project]
 name = "omnimissense"
-version = "0.1.0"
+version = "0.2.0"
 description = "Score missense variants in any species with protein language models, straight from a VCF."
 readme = "README.md"
 license = "MIT"
@@ -15,7 +15,7 @@ keywords = [
     "vcf",
 ]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "Operating System :: POSIX :: Linux",
     "Operating System :: MacOS",

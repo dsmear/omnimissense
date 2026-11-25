@@ -178,6 +178,36 @@ def precompute(
 
 
 @app.command()
+def export(
+    fasta: FastaOption,
+    gff3: Gff3Option,
+    output: Annotated[Path, typer.Option("--output", "-o", help="Output Parquet file.")],
+    model: ModelOption = DEFAULT_MODEL,
+    cache_dir: CacheOption = None,
+    canonical_only: Annotated[
+        bool, typer.Option(help="Only canonical transcripts (Ensembl_canonical tag).")
+    ] = False,
+    device: DeviceOption = None,
+    max_tokens: MaxTokensOption = DEFAULT_MAX_TOKENS,
+) -> None:
+    """Write the wild-type-marginal scores of every coding transcript to a Parquet file."""
+    from omnimissense.export import export_scores
+
+    result = export_scores(
+        fasta,
+        gff3,
+        output,
+        cache=_cache(cache_dir, model),
+        scorer_factory=_scorer_factory(model, device, max_tokens),
+        model_name=model,
+        canonical_only=canonical_only,
+    )
+    typer.echo(f"Transcripts:      {result.n_transcripts}")
+    typer.echo(f"Unique proteins:  {result.n_unique_proteins} ({result.n_residues} residues)")
+    typer.echo(f"Written to {output}")
+
+
+@app.command()
 def proteome(
     fasta: FastaOption,
     gff3: Gff3Option,

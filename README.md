@@ -1,7 +1,7 @@
 # omnimissense
 
 [![CI](https://github.com/dsmear/omnimissense/actions/workflows/ci.yml/badge.svg)](https://github.com/dsmear/omnimissense/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/dsmear/omnimissense/blob/main/LICENSE)
 
 **Score missense variants in any species with protein language models, straight from a VCF.**
 
@@ -73,10 +73,22 @@ uv run omnimissense precompute --fasta $FASTA --gff3 $GFF3
 
 uv run omnimissense annotate --vcf my_dogs.vcf.gz --fasta $FASTA --gff3 $GFF3 \
     -o my_dogs.omnimissense.vcf.gz          # also writes my_dogs.omnimissense.tsv
+
+# optional: all scores of all coding transcripts in one Parquet file
+uv run omnimissense export --fasta $FASTA --gff3 $GFF3 -o dog_scores.parquet
 ```
 
 The plain-gzip FASTA distributed by Ensembl is recompressed once to BGZF (`.fa.bgz`) next to
 the original, because random access needs it.
+
+## Precomputed scores
+
+| Species | Assembly / annotation | Model | Dataset |
+|---|---|---|---|
+| Dog | ROS_Cfam_1.0, Ensembl 116 (43,524 coding transcripts) | VESM 650M, wild-type marginal | [DavideMacchia/omnimissense-dog-ros-cfam-1.0-vesm-650m](https://huggingface.co/datasets/DavideMacchia/omnimissense-dog-ros-cfam-1.0-vesm-650m) (Parquet, 1.55 GB, CC-BY-4.0) |
+
+Produced with `omnimissense precompute` + `omnimissense export`; the dataset card documents the
+schema, provenance and limitations.
 
 ## Output
 
@@ -110,7 +122,7 @@ ref_aa alt_aa protein_length n_windows wt_marginal masked_marginal status`
 
 ## Validation
 
-Scripts and details: [benchmarks/README.md](benchmarks/README.md). Results, one file per
+Scripts and details: [benchmarks/README.md](https://github.com/dsmear/omnimissense/blob/main/benchmarks/README.md). Results, one file per
 model: `benchmarks/results/`. Two models are benchmarked: **ESM-2 650M** and **VESM 650M**
 (an ESM-2 re-trained for variant effects; scored with the wild-type marginal, as its authors
 do).
@@ -222,10 +234,19 @@ What this says:
 - Variants changing several residues at once (MNVs) are reported but not scored.
 - Scores are raw log-likelihood ratios, not calibrated probabilities of pathogenicity.
 
+## Installation
+
+Python ≥ 3.11. A CUDA GPU is strongly recommended (CPU works but is slow); bcftools is
+bundled through pysam, nothing else to install.
+
+```bash
+pip install omnimissense        # or: uv tool install omnimissense
+omnimissense doctor             # bcftools (bundled), PyTorch, CUDA
+```
+
 ## Installation (development)
 
-Requires [uv](https://docs.astral.sh/uv/) and Python ≥ 3.11. A CUDA GPU is strongly
-recommended (CPU works but is slow).
+Requires [uv](https://docs.astral.sh/uv/).
 
 ```bash
 git clone https://github.com/dsmear/omnimissense.git
@@ -245,11 +266,11 @@ uv run pre-commit run --all-files
 
 Never commit genomes, VCFs, model weights or caches: they are excluded by `.gitignore`, and a
 pre-commit hook rejects any file larger than 500 KB. Decisions and their rationale are logged
-in [NOTES.md](NOTES.md).
+in [NOTES.md](https://github.com/dsmear/omnimissense/blob/main/NOTES.md).
 
 ## Models and licenses
 
-omnimissense is released under the [MIT License](LICENSE). Model weights are not
+omnimissense is released under the [MIT License](https://github.com/dsmear/omnimissense/blob/main/LICENSE). Model weights are not
 redistributed: they are downloaded from Hugging Face on first use. Select a model with
 `--model`; the cache is kept separately per model.
 
