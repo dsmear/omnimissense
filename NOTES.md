@@ -88,3 +88,37 @@ protein → writes them to the VCF `INFO` field.
 | **pre-commit**: ruff (check + format), `check-added-large-files --maxkb=500 --enforce-all`, `detect-private-key`, basic hygiene hooks | Enforces "never commit large data, weights or secrets" mechanically, not just by `.gitignore`. CI runs the same hooks, so local and CI checks are identical. |
 | `.gitignore` excludes genomes, annotations, VCF/BAM, weights, caches, Parquet; whitelists `tests/data/` | Small hand-made fixtures for coordinate tests (Phase 2) must be committed. |
 | `initial_prompt.md` kept out of git via `.git/info/exclude` | Personal brief, not project documentation. |
+
+---
+
+## 2026-11-25 — Phase 2: MVP
+
+| Decision | Rationale |
+|---|---|
+| **bcftools csq**, not Ensembl VEP, for consequence calling | Takes VCF + FASTA + GFF3 directly; fast (C); MIT; haplotype-aware if ever needed; and it ships **inside pysam** (pysam 0.24.1 bundles bcftools/htslib 1.24, `import pysam.bcftools`), so users and CI install nothing. VEP needs a Perl stack or Docker and a sorted, bgzipped, tabix-indexed GFF. Downside shared by both: csq only accepts Ensembl-style GFF3 ("Currently, only Ensembl GFF3 files are supported", bcftools manual) — a GFF3 normaliser is the main follow-up for "any species". |
+| csq options `-l -s -` | `-l`: one record at a time, so unphased data works and each variant gets its own score. `-s -`: annotate every ALT allele regardless of genotypes. Checked on the synthetic genome that samples/genotypes pass through unchanged. |
+| BCSQ format parsed: `Consequence\|gene\|transcript\|biotype\|strand\|aa_change\|dna_change` (e.g. `missense\|GENEA\|TXA\|protein_coding\|+\|2K>2R\|45A>G`) | Observed with bcftools 1.24; the manual's older examples lack the biotype field. Entries without a single-record amino-acid change (synonymous, splice_region, `@pos`, `a+b` haplotype changes) are ignored; `*missense` (downstream of a stop) is not missense. |
+| Dog reference: **Ensembl release 116, ROS_Cfam_1.0** (GCA_014441545.1), `dna.toplevel.fa.gz` + `116.gff3.gz` | Verified via Ensembl REST (`/info/assembly`, `/info/data` → release 116) and FTP; BSD `sum` checksums matched Ensembl's CHECKSUMS for all files. |
+| Own GFF3 reader + CDS translation | csq outputs only the changed residue; ESM needs the whole protein. The reader follows csq's ID conventions so both see the same transcripts. **Validated: 43,524/43,524 dog proteins identical to Ensembl `pep.all`** after one fix: non-ATG start codons (CTG/TTG, standard code) at a complete 5' end (first CDS phase 0) are translated as M, like Ensembl (177 proteins had L instead of M before). The one Ensembl peptide we lack is a selenoprotein (`U`). |
+| **REF pre-check** against the FASTA; mismatching records flagged `OMS_REF_MISMATCH` and excluded from csq; error if >10% mismatch | bcftools csq aborts the whole run at the first REF mismatch ("the fasta reference does not match the VCF REF allele"). A high mismatch rate almost always means wrong assembly or chromosome naming (`chr1` vs `1`), so we fail with an explicit message. |
+| **Reference amino-acid check**: csq's ref aa must equal our translated protein at that position, else status `ref_aa_mismatch`, no score, warning logged | Brief: "if it does not match, report it, don't ignore it". Catches disagreements between csq's and our translation (or annotation oddities). |
+| Mitochondrial transcripts skipped (`mitochondrial_skipped`) | Verified in csq.c: a single genetic-code table is used genome-wide (default 0 = standard), so csq's consequences on MT would be wrong. (No MT coding transcripts in the dog GFF3 anyway.) Possible later: second csq run on MT with `-C 2`. |
+| Scores = LLR `log P(alt) − log P(ref)`; log-softmax over the full vocabulary, then the 20 standard amino acids | The LLR is the same whether or not probabilities are renormalised over the 20 amino acids (same denominator). |
+| Long proteins: windows of 1022 residues, overlap 511, sigmoid edge weights over the first/last 255 residues of artificial edges (scale = ramp/12.8 ≈ 20), weighted average of log-probabilities | Adapted from Brandes et al. 2023 (`esm-variants`, `get_intervals_and_weights`, MIT). Real protein ends are never down-weighted. Masked marginals use the same windows and weights. |
+| Cache: Parquet, append-only part files sorted by `seq_hash`, row groups of 128; path `<cache>/v1/<model>/{wt_marginal,masked_marginal}/` | Keyed by SHA-256 of the protein, so isoforms with the same sequence and repeated runs are free. `v1` must be bumped if scoring changes (e.g. window parameters). Not safe for concurrent writers (documented). |
+| Model loaded via `transformers.EsmForMaskedLM`, fp16 on CUDA, SDPA attention; own tokenisation from the tokenizer vocabulary | `facebookresearch/esm` is archived (Phase 1). Own tokenisation avoids per-sequence tokenizer overhead and lets tests use a tiny random model with the same alphabet. Requires transformers ≥ 4.56 for the `dtype=` argument. |
+| Default `max_tokens` = 8192 | Measured on the RTX 3070 (400 random dog proteins): 4096 → 11,993 res/s, 8192 → 12,405, 16384 → 11,961, 24576 → 11,701; peak VRAM 1.4–2.4 GiB. The GPU is saturated already at small batches. |
+| Output VCF = input VCF (all samples) + csq's `BCSQ` + `OMS*` fields | Users keep their data; BCSQ is useful context. The csq run uses a sites-only copy (faster with many samples) and is merged back in lockstep. |
+| htslib "could not retrieve index" messages silenced when opening VCFs | Harmless for streaming reads of unindexed files, but alarming to users. |
+| Tests: synthetic genome designed from protein sequences (expected effects known independently); tiny random ESM (no download) for scoring logic; real ESM-2 test behind `-m gpu` | Fast CI without GPU or downloads; the GPU test checks the real model end to end. |
+| Cache lookups read only the Parquet row groups whose `seq_hash` min/max can contain a requested hash | First real run used 5.8 GB RAM because the dataset filter loaded the whole cache (1.4 GB on disk) before filtering. With row-group pruning a fully cached re-annotation of 127,270 dog variants takes 13 s and 1.4 GB RAM, with byte-identical output. |
+| Logging: INFO only for `omnimissense.*`, third-party loggers at WARNING | httpx/Hugging Face printed every HTTP request at INFO. |
+| Hugging Face now redirects `facebook/esm2_t33_650M_UR50D` → `biohub/esm2_t33_650M_UR50D` (observed 2026-11-25) | Same move as the GitHub repo. The `facebook/...` ID still resolves; kept as default because it is the ID cited in the literature. Cache paths use the requested ID. |
+| Version 0.1.0 | First working MVP. |
+
+### Phase 2 results (RTX 3070 8 GB, Ensembl 116 dog)
+
+- Proteome: 43,525 coding transcripts → 43,524 OK (1 selenoprotein = internal stop) → 43,092 unique proteins, 26,655,640 residues.
+- `precompute`: 2,148 s (35.8 min), 12,412 residues/s, peak RAM 4.9 GB, cache 1.4 GB.
+- Demo: Ensembl 116 variation VCF, chromosome 38:0–5 Mb (127,270 records, sites only) → 0 REF mismatches, 598 records with missense, 1,689 missense consequences (128 transcripts, 52 genes), all status `ok`; 1,640 masked positions computed; 137 s first run, 13 s cached. Pearson(wt, masked) = 0.979.
+- Most damaging in the demo: ATP2B4 G833R (masked −13.3), RAB7B L122R (−13.0), KCNT2 V823E (−12.8); least: conservative I→L / L→V (+7.6/+7.7). Plausible, but **not a validation** (Phase 3).
