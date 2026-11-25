@@ -1,6 +1,6 @@
 [project]
 name = "omnimissense"
-version = "0.0.1"
+version = "0.1.0"
 description = "Score missense variants in any species with protein language models, straight from a VCF."
 readme = "README.md"
 license = "MIT"
@@ -24,6 +24,12 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = [
+    "numpy>=2",
+    "pyarrow>=20",
+    "pysam>=0.24",
+    "torch>=2.6",
+    "tqdm>=4.66",
+    "transformers>=4.56",
     "typer>=0.29",
 ]
 
@@ -64,7 +70,7 @@ select = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["-ra", "--strict-markers", "--strict-config"]
+addopts = ["-ra", "--strict-markers", "--strict-config", "-m", "not gpu"]
 markers = [
     "gpu: test needs a CUDA GPU (skipped in CI)",
     "slow: test downloads models or large data",

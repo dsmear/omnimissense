@@ -1,12 +1,10 @@
-"""Inspect the runtime environment: external tools and optional ML dependencies."""
+"""Inspect the runtime environment: bundled bcftools and the ML stack."""
 
 from __future__ import annotations
 
 import importlib
 import importlib.util
 import platform
-import shutil
-import subprocess
 from dataclasses import dataclass
 
 
@@ -19,28 +17,17 @@ class Check:
     detail: str
 
 
-def _tool_version(executable: str) -> str:
-    """Return the first line of ``<executable> --version``, or a short error note."""
+def check_bcftools() -> Check:
+    """bcftools is used through the copy bundled in pysam."""
     try:
-        result = subprocess.run(
-            [executable, "--version"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        return f"found but `--version` failed ({exc.__class__.__name__})"
-    lines = (result.stdout or result.stderr).strip().splitlines()
-    return lines[0] if lines else "found (version unknown)"
-
-
-def check_tool(name: str) -> Check:
-    """Check that an external command-line tool is on PATH."""
-    path = shutil.which(name)
-    if path is None:
-        return Check(name, ok=False, detail="not found on PATH")
-    return Check(name, ok=True, detail=f"{_tool_version(path)} ({path})")
+        version = importlib.import_module("pysam.version")
+    except ImportError:
+        return Check("bcftools", ok=False, detail="pysam not installed")
+    return Check(
+        "bcftools",
+        ok=True,
+        detail=f"{version.__bcftools_version__} (bundled in pysam {version.__version__})",
+    )
 
 
 def check_torch() -> list[Check]:
@@ -54,7 +41,7 @@ def check_torch() -> list[Check]:
         vram_gib = props.total_memory / 1024**3
         checks.append(Check("cuda", ok=True, detail=f"{props.name}, {vram_gib:.1f} GiB"))
     else:
-        checks.append(Check("cuda", ok=False, detail="no CUDA device visible (CPU only)"))
+        checks.append(Check("cuda", ok=False, detail="no CUDA device visible (CPU only, slow)"))
     return checks
 
 
@@ -62,7 +49,6 @@ def run_checks() -> list[Check]:
     """Run all environment checks, in display order."""
     return [
         Check("python", ok=True, detail=platform.python_version()),
-        check_tool("bcftools"),
-        check_tool("tabix"),
+        check_bcftools(),
         *check_torch(),
     ]

@@ -14,29 +14,21 @@ def test_version_flag_prints_version() -> None:
 
 def test_no_arguments_shows_help() -> None:
     result = runner.invoke(app, [])
-    assert "doctor" in result.output
+    for command in ("annotate", "precompute", "proteome", "doctor"):
+        assert command in result.output
 
 
 def test_doctor_lists_every_check() -> None:
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
-    for name in ("python", "bcftools", "tabix", "torch"):
+    for name in ("python", "bcftools", "torch"):
         assert name in result.stdout
 
 
-def test_check_tool_reports_missing_tool(monkeypatch) -> None:
-    monkeypatch.setattr(environment.shutil, "which", lambda _name: None)
-    check = environment.check_tool("bcftools")
-    assert not check.ok
-    assert check.detail == "not found on PATH"
-
-
-def test_check_tool_reports_version_of_found_tool(monkeypatch) -> None:
-    monkeypatch.setattr(environment.shutil, "which", lambda name: f"/fake/bin/{name}")
-    monkeypatch.setattr(environment, "_tool_version", lambda _path: "bcftools 1.22")
-    check = environment.check_tool("bcftools")
+def test_bcftools_is_bundled_with_pysam() -> None:
+    check = environment.check_bcftools()
     assert check.ok
-    assert check.detail == "bcftools 1.22 (/fake/bin/bcftools)"
+    assert "pysam" in check.detail
 
 
 def test_check_torch_when_not_installed(monkeypatch) -> None:
@@ -44,3 +36,21 @@ def test_check_torch_when_not_installed(monkeypatch) -> None:
     assert environment.check_torch() == [
         environment.Check("torch", ok=False, detail="not installed")
     ]
+
+
+def test_proteome_command_writes_fasta(synthetic, tmp_path) -> None:
+    output = tmp_path / "proteins.fa"
+    result = runner.invoke(
+        app,
+        [
+            "proteome",
+            "--fasta",
+            str(synthetic.fasta),
+            "--gff3",
+            str(synthetic.gff3),
+            "-o",
+            str(output),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert output.read_text() == ">TXA\nMKRWLEHC\n>TXB\nMDPFGKWR\n"
