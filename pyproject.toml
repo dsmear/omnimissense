@@ -27,6 +27,11 @@ dependencies = [
     "typer>=0.29",
 ]
 
+[project.urls]
+Homepage = "https://github.com/dsmear/omnimissense"
+Repository = "https://github.com/dsmear/omnimissense"
+Issues = "https://github.com/dsmear/omnimissense/issues"
+
 [project.scripts]
 omnimissense = "omnimissense.cli:app"
 

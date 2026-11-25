@@ -1,5 +1,8 @@
 # omnimissense
 
+[![CI](https://github.com/dsmear/omnimissense/actions/workflows/ci.yml/badge.svg)](https://github.com/dsmear/omnimissense/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **Score missense variants in any species with protein language models, straight from a VCF.**
 
 > **Status: pre-alpha.** The project scaffolding is in place; the scoring pipeline is under
@@ -41,7 +44,7 @@ summary. The first target species is the dog.
 Requires [uv](https://docs.astral.sh/uv/) and Python ≥ 3.11.
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/dsmear/omnimissense.git
 cd omnimissense
 uv sync
 uv run omnimissense --version
