@@ -108,3 +108,16 @@ these downloads (about 6.7 GB; MD5 checksums from the Zenodo records):
 AlphaMissense: Cheng et al., *Accurate proteome-wide missense variant effect prediction with
 AlphaMissense*, Science 381, eadg7492 (2023). Predictions used only to compute aggregate
 metrics; they are not redistributed.
+
+## 4. NCBI RefSeq annotation: translation check
+
+```bash
+uv run python benchmarks/ncbi_translation.py --fasta <asm>_genomic.fna.gz \
+    --gff3 <asm>_genomic.gff.gz --translated-cds <asm>_translated_cds.faa.gz
+```
+
+Translates every coding transcript of an NCBI RefSeq assembly (GFF3 read through bcftools
+csq, as in `omnimissense annotate`) and compares each protein with NCBI's own translation of
+the same CDS (`*_translated_cds.faa.gz`, from the assembly's FTP folder), matched by the CDS
+`protein_id`. Differences are listed with the first differing residue. Mitochondrial
+transcripts are expected to be skipped (status `mitochondrial`).
