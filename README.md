@@ -24,7 +24,7 @@ exist for any sequenced genome:
 |---|---|
 | VCF | the variants (differences from the reference genome) |
 | FASTA | the reference genome sequence |
-| GFF3 | the gene annotation (where genes, exons and coding sequences are), Ensembl-style |
+| GFF3 | the gene annotation (where genes, exons and coding sequences are): Ensembl or NCBI RefSeq layout |
 
 It outputs the same VCF (all records, all samples) with protein-language-model scores in the
 `INFO` field, plus a TSV with one row per missense consequence.
@@ -36,8 +36,10 @@ It outputs the same VCF (all records, all samples) with protein-language-model s
    stops (VCF and FASTA are probably from different assemblies).
 2. **Consequences** are called with [`bcftools csq`](https://samtools.github.io/bcftools/howtos/csq-calling.html)
    (bundled in pysam, nothing to install), one record at a time, for every ALT allele.
-3. **Proteins** are translated from the FASTA + GFF3. The reference amino acid reported by
-   csq must match the translated protein; mismatches are reported (`ref_aa_mismatch`).
+3. **Proteins** are translated from the FASTA + GFF3, using the transcripts exactly as csq
+   parsed them (`--dump-gff`), so both steps always agree on transcripts and coding segments.
+   The reference amino acid reported by csq must match the translated protein; mismatches are
+   reported (`ref_aa_mismatch`).
 4. **Scores** come from a protein language model, by default **VESM 650M** (an ESM-2 650M
    re-trained for variant effects, MIT license; fp16 on GPU), as log-likelihood ratios
    `log P(alt) − log P(ref)` at the mutated position (more negative = more likely damaging):
@@ -223,10 +225,15 @@ What this says:
 
 ## Limitations
 
-- GFF3 must follow the Ensembl layout (`ID=gene:…`, `ID=transcript:…`), as required by
-  bcftools csq. Other sources (e.g. NCBI RefSeq) must be converted first.
-- Mitochondrial transcripts are skipped: mitochondria use a different genetic code and
-  bcftools csq applies a single code to the whole genome.
+- The GFF3 must be in a layout bcftools csq reads: Ensembl and NCBI RefSeq work
+  (gene → mRNA → CDS). GTF must be converted to GFF3 first (e.g. AGAT or gffread);
+  prokaryotic GFF3 whose CDS hang directly from genes needs a transcript level
+  (bcftools' `misc/gff2gff.py`, or `gbk2bcfgff` from a GenBank file).
+- Canonical transcripts come from `Ensembl_canonical`, `MANE Select` or `RefSeq Select`
+  tags; genes without any tagged transcript get their longest CDS.
+- Mitochondrial transcripts are skipped (sequence named `MT`, `chrM`, …, or an NCBI `region`
+  with `genome=mitochondrion`): mitochondria use a different genetic code and bcftools csq
+  applies a single code to the whole genome.
 - Selenoproteins (a TGA codon read as selenocysteine) look like proteins with an internal
   stop and are skipped (1 transcript in the dog).
 - Consequences are computed one record at a time: two nearby variants on the same haplotype
@@ -251,7 +258,7 @@ Requires [uv](https://docs.astral.sh/uv/).
 ```bash
 git clone https://github.com/dsmear/omnimissense.git
 cd omnimissense
-uv sync
+uv sync --all-groups           # all groups: the benchmark tests need Biopython
 uv run omnimissense doctor     # bcftools (bundled), PyTorch, CUDA
 ```
 

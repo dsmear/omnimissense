@@ -72,7 +72,7 @@ def export_scores(
 ) -> ExportResult:
     """Write wild-type-marginal scores of every coding transcript; missing scores are computed."""
     fasta = prepare_fasta(fasta)
-    transcripts = read_transcripts(gff3)
+    transcripts = read_transcripts(gff3, fasta)
     proteins = build_proteome(fasta, transcripts)
     rows = [
         (tid, protein)

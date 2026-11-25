@@ -14,6 +14,8 @@ from omnimissense.sequences import reverse_complement, sequence_hash, translate
 
 #: Sequence names used for mitochondrial DNA. Mitochondria use a different genetic code
 #: and bcftools csq applies a single code genome-wide, so these transcripts are skipped.
+#: Sequences flagged as mitochondrial by the GFF3 itself (``Transcript.mitochondrial``,
+#: e.g. NCBI accessions such as ``NC_001224.1``) are skipped too.
 MITOCHONDRIAL_SEQIDS = frozenset({"MT", "Mt", "M", "chrM", "chrMT", "mitochondrion"})
 
 #: Non-ATG initiation codons of the standard code (NCBI table 1). When they start a complete
@@ -53,7 +55,7 @@ def coding_sequence(fasta: pysam.FastaFile, transcript: Transcript) -> str:
 def translate_transcript(fasta: pysam.FastaFile, transcript: Transcript) -> Protein:
     if not transcript.cds:
         return Protein(transcript.transcript_id, "", ProteinStatus.NO_CDS)
-    if transcript.seqid in MITOCHONDRIAL_SEQIDS:
+    if transcript.mitochondrial or transcript.seqid in MITOCHONDRIAL_SEQIDS:
         return Protein(transcript.transcript_id, "", ProteinStatus.MITOCHONDRIAL)
     cds = coding_sequence(fasta, transcript)
     protein = translate(cds).removesuffix("*")

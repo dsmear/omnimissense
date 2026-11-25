@@ -152,6 +152,67 @@ def _gff3_lines() -> list[str]:
     return lines
 
 
+def ncbi_gff3_lines(*, mitochondrial: bool = False, select: tuple[str, ...] = ()) -> list[str]:
+    """The same two genes in the NCBI RefSeq layout (``gene-``/``rna-``/``cds-`` IDs,
+    ``gene_biotype`` on genes, no biotype on mRNAs). Transcripts are ``rna-XM_GENEA.1`` and
+    ``rna-XM_GENEB.1``; ``select`` lists genes whose mRNA is tagged ``RefSeq Select``."""
+
+    def row(source: str, ftype: str, start: int, end: int, strand: str, phase: str, attrs: str):
+        return "\t".join([CHROM, source, ftype, str(start), str(end), ".", strand, phase, attrs])
+
+    genome = "mitochondrion" if mitochondrial else "chromosome"
+    lines = [
+        "##gff-version 3",
+        f"##sequence-region {CHROM} 1 {len(GENOME)}",
+        row("RefSeq", "region", 1, len(GENOME), "+", ".", f"ID={CHROM}:1..234;genome={genome}"),
+    ]
+    for gene, strand, cds, (start, end) in (
+        ("GENEA", "+", GENE_A_CDS, (41, 97)),
+        ("GENEB", "-", GENE_B_CDS, (138, 194)),
+    ):
+        rna, protein = f"XM_{gene}.1", f"XP_{gene}.1"
+        tag = ";tag=RefSeq Select" if gene in select else ""
+        lines.append(
+            row(
+                "Gnomon",
+                "gene",
+                start,
+                end,
+                strand,
+                ".",
+                f"ID=gene-{gene};Name={gene};gbkey=Gene;gene={gene};gene_biotype=protein_coding",
+            )
+        )
+        lines.append(
+            row(
+                "Gnomon",
+                "mRNA",
+                start,
+                end,
+                strand,
+                ".",
+                f"ID=rna-{rna};Parent=gene-{gene};Name={rna};gbkey=mRNA;transcript_id={rna}{tag}",
+            )
+        )
+        for i, (s, e, _phase) in enumerate(cds, start=1):
+            lines.append(
+                row("Gnomon", "exon", s, e, strand, ".", f"ID=exon-{rna}-{i};Parent=rna-{rna}")
+            )
+        for s, e, phase in cds:
+            lines.append(
+                row(
+                    "Gnomon",
+                    "CDS",
+                    s,
+                    e,
+                    strand,
+                    str(phase),
+                    f"ID=cds-{protein};Parent=rna-{rna};gbkey=CDS;protein_id={protein}",
+                )
+            )
+    return lines
+
+
 def _vcf_records() -> list[tuple[int, str, str]]:
     records = [(v.pos, v.ref, v.alt) for v in DESIGNED_VARIANTS]
     records.append((MULTIALLELIC_POS, GENOME[MULTIALLELIC_POS - 1], ",".join(MULTIALLELIC_ALTS)))

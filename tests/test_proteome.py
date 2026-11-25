@@ -26,7 +26,7 @@ def _transcript(strand: str, cds: list[tuple[int, int, int]], seqid: str = "1") 
 
 def test_both_strands_and_intron_split_codons_translate_to_designed_proteins(synthetic) -> None:
     fasta = prepare_fasta(synthetic.fasta)
-    proteins = build_proteome(fasta, read_transcripts(synthetic.gff3))
+    proteins = build_proteome(fasta, read_transcripts(synthetic.gff3, fasta))
     assert proteins["TXA"].sequence == PROTEIN_A
     assert proteins["TXB"].sequence == PROTEIN_B
     assert {p.status for p in proteins.values()} == {ProteinStatus.OK}
@@ -81,7 +81,8 @@ def test_plain_gzip_fasta_is_converted_to_bgzf(synthetic, tmp_path) -> None:
 
 
 def test_write_fasta_skips_invalid_proteins(synthetic, tmp_path) -> None:
-    proteins = build_proteome(prepare_fasta(synthetic.fasta), read_transcripts(synthetic.gff3))
+    fasta = prepare_fasta(synthetic.fasta)
+    proteins = build_proteome(fasta, read_transcripts(synthetic.gff3, fasta))
     output = tmp_path / "out.fa"
     assert write_fasta(proteins.values(), output) == 2
     assert output.read_text().startswith(">TXA\nMKRWLEHC\n")

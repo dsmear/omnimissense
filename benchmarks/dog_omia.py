@@ -323,14 +323,14 @@ def load_reference() -> DogReference:
     gsd = Path("data/dog/gsd-ensembl-116")
     fasta = prepare_fasta(fetch(GSD_URLS[GSD_FASTA], gsd / GSD_FASTA))
     gff3 = fetch(GSD_URLS[GSD_GFF3], gsd / GSD_GFF3)
-    transcripts = read_transcripts(gff3)
+    transcripts = read_transcripts(gff3, fasta)
     genes = gene_index(transcripts)
     proteins = build_proteome(
         fasta, transcripts, [tx.transcript_id for txs in genes.values() for tx in txs]
     )
     ros = Path("data/dog/ensembl-116")
     ros_fasta = prepare_fasta(fetch(ROS_URLS[ROS_FASTA], ros / ROS_FASTA))
-    ros_transcripts = read_transcripts(fetch(ROS_URLS[ROS_GFF3], ros / ROS_GFF3))
+    ros_transcripts = read_transcripts(fetch(ROS_URLS[ROS_GFF3], ros / ROS_GFF3), ros_fasta)
     return DogReference(
         fasta, gff3, transcripts, genes, gene_index(ros_transcripts), proteins, ros_fasta,
         ros_transcripts,

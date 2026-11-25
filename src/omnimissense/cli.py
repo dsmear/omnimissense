@@ -185,7 +185,8 @@ def export(
     model: ModelOption = DEFAULT_MODEL,
     cache_dir: CacheOption = None,
     canonical_only: Annotated[
-        bool, typer.Option(help="Only canonical transcripts (Ensembl_canonical tag).")
+        bool,
+        typer.Option(help="Only canonical transcripts (GFF3 tag, else the gene's longest CDS)."),
     ] = False,
     device: DeviceOption = None,
     max_tokens: MaxTokensOption = DEFAULT_MAX_TOKENS,
@@ -220,7 +221,8 @@ def proteome(
     from omnimissense.gff import read_transcripts
     from omnimissense.proteome import build_proteome, write_fasta
 
-    proteins = build_proteome(prepare_fasta(fasta), read_transcripts(gff3))
+    fasta = prepare_fasta(fasta)
+    proteins = build_proteome(fasta, read_transcripts(gff3, fasta))
     written = write_fasta(proteins.values(), output)
     for status, count in sorted(Counter(p.status.value for p in proteins.values()).items()):
         typer.echo(f"{status:<16} {count}")

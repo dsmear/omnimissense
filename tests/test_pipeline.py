@@ -4,7 +4,7 @@ import math
 
 import pysam
 import pytest
-from synthetic import DESIGNED_VARIANTS, INTERGENIC_POS, MULTIALLELIC_POS
+from synthetic import DESIGNED_VARIANTS, INTERGENIC_POS, MULTIALLELIC_POS, ncbi_gff3_lines
 
 from omnimissense import pipeline
 from omnimissense.cache import ScoreCache
@@ -56,12 +56,12 @@ def test_classify(consequence, protein, status) -> None:
     assert classify(consequence, protein) is status
 
 
-def _run(synthetic, tmp_path, scorer, *, masked=True, vcf=None):
+def _run(synthetic, tmp_path, scorer, *, masked=True, vcf=None, gff3=None):
     cache = ScoreCache(tmp_path / "cache", "tiny")
     result = annotate(
         vcf or synthetic.vcf,
         synthetic.fasta,
-        synthetic.gff3,
+        gff3 or synthetic.gff3,
         tmp_path / "out.vcf.gz",
         tmp_path / "out.tsv",
         cache=cache,
@@ -108,6 +108,24 @@ def test_annotate_end_to_end(synthetic, tmp_path, tiny_scorer) -> None:
         ("TXB", "D2G"),
         ("TXB", "F4L"),
     }
+
+
+def test_annotate_with_ncbi_refseq_gff3(synthetic, tmp_path, tiny_scorer) -> None:
+    gff3 = tmp_path / "ncbi.gff3"
+    gff3.write_text("\n".join(ncbi_gff3_lines()) + "\n")
+    result, _ = _run(synthetic, tmp_path, tiny_scorer, gff3=gff3)
+    assert result.status_counts == {"ok": N_MISSENSE}
+    changes = {
+        f"{v.consequence.ref_aa}{v.consequence.protein_pos}{v.consequence.alt_aa}"
+        for v in result.variants
+    }
+    expected = {v.expected for v in DESIGNED_VARIANTS if v.expected} | {"E6D"}
+    assert changes == expected
+    assert {v.consequence.transcript_id for v in result.variants} == {
+        "rna-XM_GENEA.1",
+        "rna-XM_GENEB.1",
+    }
+    assert all(v.canonical for v in result.variants)  # no tags: longest CDS of each gene
 
 
 def test_second_run_reads_scores_from_cache(synthetic, tmp_path, tiny_scorer) -> None:

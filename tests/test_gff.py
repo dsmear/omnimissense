@@ -1,8 +1,20 @@
 import gzip
 
 import pytest
+from synthetic import CHROM, PROTEIN_A, PROTEIN_B, _gff3_lines, ncbi_gff3_lines
 
-from omnimissense.gff import CdsSegment, GffFormatError, parse_attributes, read_transcripts
+from omnimissense.consequences import CsqError
+from omnimissense.gff import CdsSegment, csq_id, parse_attributes, read_transcripts
+from omnimissense.proteome import ProteinStatus, build_proteome
+
+
+def _write(path, lines):
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def _row(ftype, start, end, strand, phase, attrs):
+    return "\t".join([CHROM, "test", ftype, str(start), str(end), ".", strand, phase, attrs])
 
 
 def test_parse_attributes_decodes_escapes() -> None:
@@ -10,8 +22,14 @@ def test_parse_attributes_decodes_escapes() -> None:
     assert attrs == {"ID": "gene:G1", "Name": "ABC;1", "tag": "basic,Ensembl_canonical"}
 
 
+def test_csq_id_strips_only_ensembl_prefixes() -> None:
+    assert csq_id("transcript:ENST1") == "ENST1"
+    assert csq_id("gene:ENSG1") == "ENSG1"
+    assert csq_id("rna-XM_1.1") == "rna-XM_1.1"
+
+
 def test_read_transcripts_from_synthetic_annotation(synthetic) -> None:
-    transcripts = read_transcripts(synthetic.gff3)
+    transcripts = read_transcripts(synthetic.gff3, synthetic.fasta)
     assert set(transcripts) == {"TXA", "TXB"}
 
     txa = transcripts["TXA"]
@@ -21,11 +39,12 @@ def test_read_transcripts_from_synthetic_annotation(synthetic) -> None:
         "+",
         "protein_coding",
     )
-    assert txa.canonical is True
+    assert txa.canonical is True  # Ensembl_canonical tag
+    assert txa.mitochondrial is False
     assert txa.cds_in_transcript_order() == [CdsSegment(41, 47, 0), CdsSegment(78, 97, 2)]
 
     txb = transcripts["TXB"]
-    assert txb.canonical is False
+    assert txb.canonical is True  # gene GB has no tagged transcript: longest CDS
     assert txb.strand == "-"
     # On the minus strand the transcript starts at the right-most CDS.
     assert txb.cds_in_transcript_order() == [CdsSegment(184, 194, 0), CdsSegment(138, 153, 1)]
@@ -34,15 +53,100 @@ def test_read_transcripts_from_synthetic_annotation(synthetic) -> None:
 def test_read_transcripts_accepts_gzip(synthetic, tmp_path) -> None:
     compressed = tmp_path / "annotation.gff3.gz"
     compressed.write_bytes(gzip.compress(synthetic.gff3.read_bytes()))
-    assert set(read_transcripts(compressed)) == {"TXA", "TXB"}
+    assert set(read_transcripts(compressed, synthetic.fasta)) == {"TXA", "TXB"}
 
 
-def test_non_ensembl_gff3_is_rejected_with_a_hint(tmp_path) -> None:
-    gff = tmp_path / "ncbi.gff3"
-    gff.write_text(
-        "##gff-version 3\n"
-        "1\tRefSeq\tgene\t1\t100\t.\t+\t.\tID=gene-ABC;Name=ABC\n"
-        "1\tRefSeq\tmRNA\t1\t100\t.\t+\t.\tID=rna-XM_1;Parent=gene-ABC\n"
+def test_ncbi_refseq_layout_gives_the_same_proteins(synthetic, tmp_path) -> None:
+    gff = _write(tmp_path / "ncbi.gff3", ncbi_gff3_lines())
+    transcripts = read_transcripts(gff, synthetic.fasta)
+    assert set(transcripts) == {"rna-XM_GENEA.1", "rna-XM_GENEB.1"}
+    txa = transcripts["rna-XM_GENEA.1"]
+    # NCBI mRNAs carry no biotype: csq derives it from the gene's gene_biotype.
+    assert (txa.gene_id, txa.gene_name, txa.biotype) == ("gene-GENEA", "GENEA", "protein_coding")
+    assert all(tx.canonical for tx in transcripts.values())  # no tags: longest CDS per gene
+
+    proteins = build_proteome(synthetic.fasta, transcripts)
+    assert proteins["rna-XM_GENEA.1"].sequence == PROTEIN_A
+    assert proteins["rna-XM_GENEB.1"].sequence == PROTEIN_B
+
+
+def test_ncbi_mitochondrial_region_is_detected(synthetic, tmp_path) -> None:
+    # NCBI names sequences by accession, so only the region's genome= attribute says "MT".
+    gff = _write(tmp_path / "ncbi_mt.gff3", ncbi_gff3_lines(mitochondrial=True))
+    transcripts = read_transcripts(gff, synthetic.fasta)
+    assert all(tx.mitochondrial for tx in transcripts.values())
+    proteins = build_proteome(synthetic.fasta, transcripts)
+    assert {p.status for p in proteins.values()} == {ProteinStatus.MITOCHONDRIAL}
+
+
+def _gene(gid, start, end, strand):
+    return _row("gene", start, end, strand, ".", f"ID=gene:{gid};biotype=protein_coding")
+
+
+def _mrna(tid, gid, start, end, strand, extra=""):
+    attrs = f"ID=transcript:{tid};Parent=gene:{gid};biotype=protein_coding{extra}"
+    return _row("mRNA", start, end, strand, ".", attrs)
+
+
+def _cds(tid, start, end, strand, phase):
+    return _row("CDS", start, end, strand, str(phase), f"Parent=transcript:{tid}")
+
+
+def test_canonical_tags_take_precedence_over_cds_length(synthetic, tmp_path) -> None:
+    tag = ";tag=basic,Ensembl_canonical"
+    lines = [
+        "##gff-version 3",
+        _gene("GA", 41, 97, "+"),
+        _mrna("A_TAG", "GA", 41, 97, "+", tag),  # tagged, shorter CDS
+        _cds("A_TAG", 78, 97, "+", 0),
+        _mrna("A_LONG", "GA", 41, 97, "+"),  # untagged, longer CDS
+        _cds("A_LONG", 41, 47, "+", 0),
+        _cds("A_LONG", 78, 97, "+", 2),
+        _gene("GB", 138, 194, "-"),  # no tags in this gene: the longest CDS wins
+        _mrna("B_SHORT", "GB", 138, 194, "-"),
+        _cds("B_SHORT", 184, 194, "-", 0),
+        _mrna("B_LONG", "GB", 138, 194, "-"),
+        _cds("B_LONG", 138, 153, "-", 1),
+        _cds("B_LONG", 184, 194, "-", 0),
+    ]
+    transcripts = read_transcripts(_write(tmp_path / "tags.gff3", lines), synthetic.fasta)
+    canonical = {tid for tid, tx in transcripts.items() if tx.canonical}
+    assert canonical == {"A_TAG", "B_LONG"}
+
+
+def test_tagged_non_coding_transcript_keeps_coding_ones_non_canonical(synthetic, tmp_path) -> None:
+    attrs = "ID=transcript:TXB_NC;Parent=gene:GB;biotype=retained_intron;tag=Ensembl_canonical"
+    lines = [
+        *_gff3_lines(),
+        _row("lnc_RNA", 138, 194, "-", ".", attrs),
+        _row("exon", 138, 194, "-", ".", "Parent=transcript:TXB_NC"),
+    ]
+    transcripts = read_transcripts(_write(tmp_path / "nc.gff3", lines), synthetic.fasta)
+    assert transcripts["TXB"].canonical is False
+    assert transcripts["TXB_NC"].canonical is True
+    assert transcripts["TXB_NC"].cds == []
+
+
+def test_original_biotype_is_kept(synthetic, tmp_path) -> None:
+    # csq would report "NMD"; the GFF3's own biotype is kept (as before, and as exported).
+    txa = "ID=transcript:TXA;Parent=gene:GA;biotype="
+    lines = [
+        line.replace(txa + "protein_coding", txa + "nonsense_mediated_decay")
+        for line in _gff3_lines()
+    ]
+    transcripts = read_transcripts(_write(tmp_path / "nmd.gff3", lines), synthetic.fasta)
+    assert transcripts["TXA"].biotype == "nonsense_mediated_decay"
+
+
+def test_cds_directly_under_genes_is_rejected_with_a_hint(synthetic, tmp_path) -> None:
+    gff = _write(
+        tmp_path / "prokaryote.gff3",
+        [
+            "##gff-version 3",
+            _row("gene", 41, 97, "+", ".", "ID=gene-A;Name=geneA;gene_biotype=protein_coding"),
+            _row("CDS", 41, 47, "+", "0", "ID=cds-WP_1.1;Parent=gene-A"),
+            _row("CDS", 78, 97, "+", "2", "ID=cds-WP_1.1;Parent=gene-A"),
+        ],
     )
-    with pytest.raises(GffFormatError, match="Ensembl-style"):
-        read_transcripts(gff)
+    with pytest.raises(CsqError, match="needs a transcript level"):
+        read_transcripts(gff, synthetic.fasta)

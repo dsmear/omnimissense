@@ -538,13 +538,14 @@ def annotate(
         sites = Path(tmp) / "sites.bcf"
         n_records, ref_mismatches = split_ref_mismatches(vcf, fasta, sites)
         csq_vcf = Path(tmp) / "csq.bcf"
+        csq_dump = Path(tmp) / "annotation.gff.gz"
         log.info("Calling consequences with bcftools csq")
-        messages = run_csq(sites, fasta, gff3, csq_vcf, threads=threads)
+        messages = run_csq(sites, fasta, gff3, csq_vcf, threads=threads, dump_gff=csq_dump)
         log.debug("bcftools csq messages:\n%s", messages)
         _, variants = collect_missense(csq_vcf)
         log.info("%d records, %d missense consequences", n_records, len(variants))
 
-        transcripts = read_transcripts(gff3)
+        transcripts = read_transcripts(gff3, fasta, csq_dump=csq_dump)
         needed = {v.consequence.transcript_id for v in variants}
         proteins = build_proteome(fasta, transcripts, needed)
         classify_variants(variants, transcripts, proteins)
@@ -584,7 +585,7 @@ def precompute(
 ) -> PrecomputeResult:
     """Compute and cache wild-type marginals for every protein of an annotation."""
     fasta = prepare_fasta(fasta)
-    transcripts = read_transcripts(gff3)
+    transcripts = read_transcripts(gff3, fasta)
     proteins = build_proteome(fasta, transcripts)
     status_counts = Counter(p.status.value for p in proteins.values())
     sequences = {p.seq_hash: p.sequence for p in proteins.values() if p.status is ProteinStatus.OK}
