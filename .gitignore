@@ -1,0 +1,70 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# --- Editors / OS ---
+.idea/
+.vscode/
+.DS_Store
+
+# --- Secrets ---
+.env
+.env.*
+*.pem
+*.key
+
+# --- Data: genomes, annotations, variants, alignments (never committed) ---
+data/
+*.fa
+*.fa.gz
+*.fasta
+*.fasta.gz
+*.fna
+*.fna.gz
+*.fai
+*.gzi
+*.gff
+*.gff.gz
+*.gff3
+*.gff3.gz
+*.gtf
+*.gtf.gz
+*.vcf
+*.vcf.gz
+*.bcf
+*.tbi
+*.csi
+*.bam
+*.cram
+*.bai
+*.crai
+
+# --- Model weights and caches (never committed) ---
+models/
+cache/
+.cache/
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+*.onnx
+*.h5
+*.parquet
+
+# --- Outputs ---
+results/
+outputs/
+
+# --- Small hand-made test fixtures ARE committed ---
+!tests/data/
+!tests/data/**
