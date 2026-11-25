@@ -89,3 +89,30 @@ def test_long_protein_masked_marginal_is_weighted_over_windows(small_window_scor
 def test_sequences_longer_than_the_context_must_use_windows(small_window_scorer) -> None:
     with pytest.raises(ValueError, match="windows"):
         small_window_scorer.aa_log_probs([("A" * 21, None)])
+
+
+def test_apply_partial_state_replaces_only_given_tensors(tiny_model) -> None:
+    import copy
+
+    from omnimissense.scoring import apply_partial_state
+
+    model = copy.deepcopy(tiny_model)
+    key = "lm_head.dense.weight"
+    before = {k: v.clone() for k, v in model.state_dict().items()}
+    new = torch.ones_like(before[key])
+    assert apply_partial_state(model, {key: new}) == 1
+    after = model.state_dict()
+    assert torch.equal(after[key], new)
+    assert all(torch.equal(after[k], before[k]) for k in before if k != key)
+    with pytest.raises(ValueError, match="not found"):
+        apply_partial_state(model, {"no.such.tensor": new})
+    with pytest.raises(ValueError, match="empty"):
+        apply_partial_state(model, {})
+
+
+def test_vesm_names() -> None:
+    from omnimissense.scoring import vesm_base
+
+    assert vesm_base("VESM_650M") == "facebook/esm2_t33_650M_UR50D"
+    with pytest.raises(ValueError, match="non-commercial"):
+        vesm_base("VESM3")

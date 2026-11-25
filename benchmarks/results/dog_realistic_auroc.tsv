@@ -1,9 +1,0 @@
-causal_set	negatives	subset	n_causal	n_negative	dog_esm2_masked	dog_esm2_masked_ci95	dog_esm2_wt	dog_esm2_wt_ci95	human_esm2_masked	human_esm2_masked_ci95	alphamissense	alphamissense_ci95	blosum62	blosum62_ci95	diff_dog_esm2_vs_alphamissense_ci95	diff_dog_vs_human_esm2_ci95
-pathogenic	rare	all variants	49	7581	0.913	0.866-0.949	0.903	0.853-0.941	0.915	0.869-0.951	0.936	0.897-0.968	0.67	0.606-0.733	-0.070 to +0.021	-0.027 to +0.031
-pathogenic	rare	scored by all methods	48	4180	0.882	0.829-0.927	0.87	0.814-0.919	0.874	0.817-0.922	0.912	0.869-0.948	0.663	0.594-0.727	-0.077 to +0.009	-0.002 to +0.026
-pathogenic	common	all variants	49	524	0.959	0.922-0.985	0.951	0.913-0.981	0.953	0.915-0.982	0.968	0.933-0.990	0.677	0.608-0.746	-0.051 to +0.032	-0.021 to +0.041
-pathogenic	common	scored by all methods	48	212	0.936	0.889-0.974	0.923	0.874-0.966	0.917	0.866-0.962	0.955	0.922-0.980	0.707	0.633-0.781	-0.064 to +0.013	+0.002 to +0.041
-disease	rare	all variants	118	7581	0.887	0.852-0.916	0.884	0.849-0.915	0.887	0.853-0.916	0.909	0.876-0.937	0.642	0.594-0.690	-0.057 to +0.011	-0.022 to +0.024
-disease	rare	scored by all methods	113	4180	0.857	0.819-0.890	0.853	0.816-0.888	0.85	0.811-0.886	0.89	0.861-0.917	0.633	0.580-0.684	-0.065 to -0.003	+0.000 to +0.015
-disease	common	all variants	118	524	0.943	0.916-0.966	0.94	0.913-0.964	0.933	0.903-0.960	0.949	0.921-0.974	0.649	0.593-0.703	-0.038 to +0.025	-0.013 to +0.036
-disease	common	scored by all methods	113	212	0.92	0.885-0.950	0.915	0.880-0.946	0.903	0.866-0.936	0.946	0.919-0.967	0.675	0.612-0.733	-0.059 to +0.005	+0.005 to +0.032

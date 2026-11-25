@@ -39,6 +39,49 @@ ESM_ALPHABET = (
 )  # fmt: skip
 
 
+#: VESM (Dinh, Jang, Zaitlen & Ntranos 2025; code and weights MIT): ESM-2 models whose last
+#: layers and output head were re-trained for variant effect prediction. The ``.pth`` files
+#: hold only the re-trained tensors and are applied on top of the base ESM-2 checkpoint.
+#: VESM3 (built on ESM3-open, non-commercial license) is deliberately not supported.
+VESM_REPO = "ntranoslab/vesm"
+VESM_REVISION = "946749efe0c5bda4693884092df3a73c542752f3"
+VESM_BASES = {
+    "VESM_35M": "facebook/esm2_t12_35M_UR50D",
+    "VESM_150M": "facebook/esm2_t30_150M_UR50D",
+    "VESM_650M": "facebook/esm2_t33_650M_UR50D",
+    "VESM_3B": "facebook/esm2_t36_3B_UR50D",
+}
+
+
+def vesm_base(variant: str) -> str:
+    """Base ESM-2 checkpoint of a VESM variant."""
+    if variant not in VESM_BASES:
+        raise ValueError(
+            f"unsupported VESM model {variant!r}; choose one of {sorted(VESM_BASES)} "
+            "(VESM3 is not supported: it is built on ESM3-open, non-commercial license)"
+        )
+    return VESM_BASES[variant]
+
+
+def load_vesm_state(variant: str) -> dict[str, torch.Tensor]:
+    from huggingface_hub import hf_hub_download
+
+    vesm_base(variant)  # validate the name before downloading
+    path = hf_hub_download(VESM_REPO, f"{variant}.pth", revision=VESM_REVISION)
+    return torch.load(path, map_location="cpu", weights_only=True)
+
+
+def apply_partial_state(model: torch.nn.Module, state: Mapping[str, torch.Tensor]) -> int:
+    """Overwrite a subset of the model's tensors; every key must exist in the model."""
+    if not state:
+        raise ValueError("empty state dict")
+    result = model.load_state_dict(dict(state), strict=False)
+    if result.unexpected_keys:
+        raise ValueError(f"tensors not found in the model: {result.unexpected_keys[:5]}")
+    log.info("Replaced %d of %d tensors of the base model", len(state), len(model.state_dict()))
+    return len(state)
+
+
 def log_probs_to_llr(log_probs: np.ndarray, sequence: str) -> np.ndarray:
     """Turn per-position log-probabilities (``L x 20``) into LLRs vs the wild-type residue.
 
@@ -87,7 +130,11 @@ class MaskedLMScorer:
         half: bool | None = None,
         max_tokens: int = DEFAULT_MAX_TOKENS,
     ) -> MaskedLMScorer:
-        """Load an ESM-style checkpoint from Hugging Face (fp16 on GPU, fp32 on CPU)."""
+        """Load an ESM-style checkpoint from Hugging Face (fp16 on GPU, fp32 on CPU).
+
+        ``model_name`` is a Hugging Face model ID (``facebook/esm2_t33_650M_UR50D``) or a VESM
+        model as ``ntranoslab/vesm/VESM_650M`` (see ``VESM_BASES``).
+        """
         from transformers import AutoTokenizer, EsmForMaskedLM
 
         device = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -95,8 +142,18 @@ class MaskedLMScorer:
             half = device.startswith("cuda")
         dtype = torch.float16 if half else torch.float32
         log.info("Loading %s on %s (%s)", model_name, device, dtype)
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        model = EsmForMaskedLM.from_pretrained(model_name, dtype=dtype, attn_implementation="sdpa")
+        if model_name.startswith(VESM_REPO + "/"):
+            variant = model_name.removeprefix(VESM_REPO + "/")
+            base = vesm_base(variant)
+            tokenizer = AutoTokenizer.from_pretrained(base)
+            model = EsmForMaskedLM.from_pretrained(base, attn_implementation="sdpa")
+            apply_partial_state(model, load_vesm_state(variant))
+            model = model.to(dtype)
+        else:
+            tokenizer = AutoTokenizer.from_pretrained(model_name)
+            model = EsmForMaskedLM.from_pretrained(
+                model_name, dtype=dtype, attn_implementation="sdpa"
+            )
         return cls(
             model.to(device),
             tokenizer.get_vocab(),

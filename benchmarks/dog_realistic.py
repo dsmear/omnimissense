@@ -47,6 +47,7 @@ from dog_omia import (
     load_reference,
     read_omia,
 )
+from models import model_tag
 from stats import auroc, bootstrap_ci, bootstrap_diff_ci
 
 from omnimissense.cache import ScoreCache, default_cache_dir
@@ -70,7 +71,16 @@ UNIPROT_HUMAN = Path("data/human/uniprot_human_reviewed.tsv")
 #: Global alignment of very long proteins is slow and memory hungry; they are not mapped.
 MAX_ALIGN_LENGTH = 6000
 
-METHODS = ("dog_esm2_masked", "dog_esm2_wt", "human_esm2_masked", "alphamissense", "blosum62")
+#: dog_* = the chosen model on the dog protein (omnimissense); human_* = the same model on the
+#: human ortholog; masked / wt = masked or wild-type marginal.
+METHODS = ("dog_masked", "dog_wt", "human_masked", "human_wt", "alphamissense", "blosum62")
+#: Paired AUROC differences reported with a bootstrap interval.
+DIFFERENCES = (
+    ("dog_masked", "human_masked"),
+    ("dog_wt", "human_wt"),
+    ("dog_masked", "alphamissense"),
+    ("dog_wt", "alphamissense"),
+)
 
 
 @dataclass(frozen=True)
@@ -270,8 +280,11 @@ def main() -> int:
     parser.add_argument("--max-af", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--output-prefix", default="benchmarks/results/dog_realistic")
+    parser.add_argument("--output-prefix", help="default: benchmarks/results/dog_realistic_<model>")
     args = parser.parse_args()
+    args.output_prefix = (
+        args.output_prefix or f"benchmarks/results/dog_realistic_{model_tag(args.model)}"
+    )
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     for name in ("dog_realistic", "dog_omia", "omnimissense"):
         logging.getLogger(name).setLevel(logging.INFO)
@@ -400,6 +413,11 @@ def main() -> int:
         for a, pos, _, _ in human.values()
     }
     human_masked = cached_masked_scores(human_queries, cache, lazy)
+    human_wt = cached_wt_scores(
+        {sequence_hash(human_sequences[a]): human_sequences[a] for a, _, _, _ in human.values()},
+        cache,
+        lazy,
+    )
     am = load_alphamissense(
         ALPHAMISSENSE, {(a, f"{r}{pos}{alt}") for a, pos, r, alt in human.values()}
     )
@@ -415,9 +433,10 @@ def main() -> int:
         seq = dog_sequences[v.transcript_id]
         h = sequence_hash(seq)
         out = {
-            "dog_esm2_masked": -float(masked[(h, v.position)][AA_INDEX[v.alt]]),
-            "dog_esm2_wt": -float(wt[h][0][v.position - 1, AA_INDEX[v.alt]]),
-            "human_esm2_masked": -np.inf,
+            "dog_masked": -float(masked[(h, v.position)][AA_INDEX[v.alt]]),
+            "dog_wt": -float(wt[h][0][v.position - 1, AA_INDEX[v.alt]]),
+            "human_masked": -np.inf,
+            "human_wt": -np.inf,
             "alphamissense": -np.inf,
             "blosum62": -float(BLOSUM62[v.ref, v.alt]),
         }
@@ -425,7 +444,8 @@ def main() -> int:
         if mapped:
             accession, pos, r, alt = mapped
             hh = sequence_hash(human_sequences[accession])
-            out["human_esm2_masked"] = -float(human_masked[(hh, pos)][AA_INDEX[alt]])
+            out["human_masked"] = -float(human_masked[(hh, pos)][AA_INDEX[alt]])
+            out["human_wt"] = -float(human_wt[hh][0][pos - 1, AA_INDEX[alt]])
             out["alphamissense"] = am.get((accession, f"{r}{pos}{alt}"), -np.inf)
         return out
 
@@ -462,18 +482,14 @@ def main() -> int:
                     low, high = bootstrap_ci(y, s)
                     row[m] = round(auroc(y, s), 3)
                     row[f"{m}_ci95"] = f"{low:.3f}-{high:.3f}"
-                d_low, d_high = bootstrap_diff_ci(
-                    y,
-                    np.nan_to_num(table["dog_esm2_masked"][mask], neginf=-1e9),
-                    np.nan_to_num(table["alphamissense"][mask], neginf=-1e9),
-                )
-                row["diff_dog_esm2_vs_alphamissense_ci95"] = f"{d_low:+.3f} to {d_high:+.3f}"
-                d_low, d_high = bootstrap_diff_ci(
-                    y,
-                    np.nan_to_num(table["dog_esm2_masked"][mask], neginf=-1e9),
-                    np.nan_to_num(table["human_esm2_masked"][mask], neginf=-1e9),
-                )
-                row["diff_dog_vs_human_esm2_ci95"] = f"{d_low:+.3f} to {d_high:+.3f}"
+                for a, b in DIFFERENCES:
+                    d_low, d_high = bootstrap_diff_ci(
+                        y,
+                        np.nan_to_num(table[a][mask], neginf=-1e9),
+                        np.nan_to_num(table[b][mask], neginf=-1e9),
+                    )
+                    row[f"diff_{a}_vs_{b}"] = round(row[a] - row[b], 3)
+                    row[f"diff_{a}_vs_{b}_ci95"] = f"{d_low:+.3f} to {d_high:+.3f}"
                 auroc_rows.append(row)
 
     # ---- ranking: each causal variant inserted among each dog's rare missense candidates
@@ -522,9 +538,9 @@ def main() -> int:
         "common_missense": len(common),
         "causal_pathogenic": len(causal_sets["pathogenic"]),
         "causal_disease": len(causal_sets["disease"]),
-        "human_mappable_causal": scored_fraction(causal_scores["disease"], "human_esm2_masked"),
-        "human_mappable_rare": scored_fraction(rare_scores, "human_esm2_masked"),
-        "human_mappable_common": scored_fraction(common_scores, "human_esm2_masked"),
+        "human_mappable_causal": scored_fraction(causal_scores["disease"], "human_masked"),
+        "human_mappable_rare": scored_fraction(rare_scores, "human_masked"),
+        "human_mappable_common": scored_fraction(common_scores, "human_masked"),
         "alphamissense_found_causal": scored_fraction(causal_scores["disease"], "alphamissense"),
         "alphamissense_found_rare": scored_fraction(rare_scores, "alphamissense"),
         "alphamissense_found_common": scored_fraction(common_scores, "alphamissense"),
@@ -542,10 +558,9 @@ def main() -> int:
     Path(f"{prefix}.summary.tsv").write_text("".join(f"{k}\t{v}\n" for k, v in summary.items()))
 
     print(
-        "\n| causal | negatives | subset | n | dog ESM-2 masked | dog ESM-2 wt "
-        "| human ESM-2 | AlphaMissense | BLOSUM62 |"
+        f"\nModel: {args.model}\n| causal | negatives | subset | n | " + " | ".join(METHODS) + " |"
     )
-    print("|---|---|---|---|---|---|---|---|---|")
+    print("|---" * (4 + len(METHODS)) + "|")
     for r in auroc_rows:
         print(
             f"| {r['causal_set']} | {r['negatives']} | {r['subset']} "
@@ -560,6 +575,10 @@ def main() -> int:
             f"| {r['causal_set']} | {r['method']} | {r['median_rank']:.1f} | {r['top1']:.0%} "
             f"| {r['top5']:.0%} | {r['top10']:.0%} | {r['causal_scored']:.0%} |"
         )
+    print("\nPaired AUROC differences (95% bootstrap interval):")
+    for r in auroc_rows:
+        diffs = "; ".join(f"{a}-{b} {r[f'diff_{a}_vs_{b}_ci95']}" for a, b in DIFFERENCES)
+        print(f"  {r['causal_set']}/{r['negatives']}/{r['subset']}: {diffs}")
     print()
     for k, v in summary.items():
         print(f"{k}: {v}")

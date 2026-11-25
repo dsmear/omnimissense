@@ -32,3 +32,10 @@ def test_real_model_scores_are_sane(esm2) -> None:
     # much worse to the model than a conservative I44V.
     [masked] = esm2.masked_marginals([(UBIQUITIN, 44)])
     assert masked[AA_INDEX["D"]] < masked[AA_INDEX["V"]] - 2
+
+
+def test_vesm_650m_loads_and_scores() -> None:
+    vesm = MaskedLMScorer.from_pretrained("ntranoslab/vesm/VESM_650M")
+    [(llr, _)] = vesm.wt_marginals([UBIQUITIN])
+    assert np.isfinite(llr).all()
+    assert llr[43, AA_INDEX["D"]] < llr[43, AA_INDEX["V"]] - 2

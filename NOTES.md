@@ -180,3 +180,23 @@ protein → writes them to the VCF `INFO` field.
 - AUROC pathogenic vs rare: omnimissense 0.913 (all) / 0.882 (scored by all); human ESM-2 0.915 / 0.874; AlphaMissense 0.936 / 0.912.
 - Paired differences (scored-by-all subsets): dog − human ESM-2 = +0.008 (−0.002 to +0.026) pathogenic/rare, +0.019 (+0.002 to +0.041) pathogenic/common, +0.007 (+0.000 to +0.015) disease/rare, +0.017 (+0.005 to +0.032) disease/common. Dog ESM-2 − AlphaMissense: −0.030 (−0.077 to +0.009), −0.019 (−0.064 to +0.013), −0.033 (−0.065 to −0.003), −0.026 (−0.059 to +0.005).
 - Conclusions: (1) scoring the species' own protein gives a small, consistent gain over the human ortholog with the same model; (2) the coverage advantage is real (100% vs ~56% of rare variants) but costs the human workaround little in dogs because unmappable variants are mostly benign — it should matter more in species far from human; (3) AlphaMissense is stronger than ESM-2 650M; a stronger permissive model (VESM, MIT) is the most promising lever.
+
+---
+
+## 2026-11-25 — Phase 4b: VESM (inserted before the release, at the user's request)
+
+| Decision | Rationale |
+|---|---|
+| VESM support as model ID `ntranoslab/vesm/VESM_<size>`, Hugging Face revision pinned (`946749e…`) | VESM `.pth` files are partial state dicts: for VESM_650M, 87 tensors / 100 M parameters (embeddings, layers 28–32, LM head), all different from ESM-2 and all present in ESM-2 650M. They are loaded with `load_state_dict(strict=False)` on top of the base ESM-2; unexpected keys raise an error (so a wrong file cannot be silently ignored). The tied embedding/decoder tensors are identical in the VESM file, so loading both is safe (checked). |
+| VESM3 refused with an explicit error; VESM_3B supported but not benchmarked | VESM3 is built on ESM3-open (non-commercial license). VESM_3B needs the 11 GB ESM-2 3B checkpoint and does not fit an 8 GB GPU with the desktop running. |
+| Both wild-type and masked marginals reported for every model; human-ortholog wild-type marginal added to `dog_realistic.py` | The VESM authors score with one unmasked forward pass (wild-type marginal, `get_llrs` in their README); ESM-2 is usually best with masked marginals (ProteinGym's choice). Comparisons use the same scoring mode on dog and human. |
+| Result files tagged by model (`benchmarks/models.py`) | Keeps ESM-2 and VESM results side by side; the ESM-2 files were regenerated from the cache under the new names (identical values). |
+
+### Phase 4b results (VESM_650M, wild-type marginal unless stated)
+
+- ProteinGym (6 assays): VESM wt 0.774 / 0.390 / 0.562 / 0.452 / 0.725 / 0.523 (mean 0.571) vs ESM-2 masked mean 0.554; VESM better on 5 of 6. VESM masked is lower than VESM wt on 4 of 6, as expected from how VESM was trained.
+- Dog OMIA vs common: pathogenic 0.977 (0.962–0.991) vs ESM-2 0.962; same genes 0.961 vs 0.947; disease 0.956 vs 0.945. Pathogenic vs traits 0.550 (0.403–0.703): still no discrimination.
+- Realistic ranking (49 pathogenic × 50 dogs): VESM dog median rank 4, top-10 72% (ESM-2 6 / 66%, AlphaMissense 4 / 75%). AUROC pathogenic vs rare 0.927 all / 0.903 scored-by-all (AlphaMissense 0.936 / 0.912); VESM − AlphaMissense −0.035 to +0.019 (n.s.).
+- Dog vs human ortholog with VESM wt: −0.008 to +0.006 (no difference); with ESM-2 masked the small dog advantage remains.
+- "Causal in the most damaging 10% of its protein" is 0% with VESM vs 8% with ESM-2, but the median in-protein percentile is similar (0.336 vs 0.319): VESM pushes the most conserved positions further into the tail; not a bug (LLR distributions checked on ubiquitin, no saturation, ~1,300 distinct values). This metric is not informative and is no longer quoted in the README.
+- Recommendation: make VESM_650M the default and the wild-type marginal the primary score (it is also the cheap one: it comes from the precomputed proteome, while masked marginals dominate the annotation time).

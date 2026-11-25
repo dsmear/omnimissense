@@ -1,0 +1,16 @@
+omia_dog_missense_records_used	176
+omia_mapped	133
+omia_reference_residue_mismatch	25
+omia_gene_not_in_annotation	16
+omia_no_single_protein_change	2
+omia_mapped_unique	133
+omia_mapped_via_ros_cfam	21
+causal_pathogenic	49
+causal_disease	118
+causal_trait	15
+min_af	0.05
+random_genes	494
+causal_genes	109
+common_missense_same_genes	118
+common_missense_random_genes	403
+common_removed_as_causal	3

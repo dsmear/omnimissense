@@ -1,0 +1,16 @@
+omia_mapping	{'mapped': 133, 'reference_residue_mismatch': 25, 'gene_not_in_annotation': 16, 'no_single_protein_change': 2, 'mapped_unique': 133, 'mapped_via_ros_cfam': 21}
+dogs	50
+breeds	49
+max_af_rare	0.01
+rare_missense_unique	7581
+rare_missense_per_dog_median	126
+rare_missense_per_dog_range	47-609
+common_missense	524
+causal_pathogenic	49
+causal_disease	118
+human_mappable_causal	0.958
+human_mappable_rare	0.559
+human_mappable_common	0.408
+alphamissense_found_causal	0.958
+alphamissense_found_rare	0.551
+alphamissense_found_common	0.405

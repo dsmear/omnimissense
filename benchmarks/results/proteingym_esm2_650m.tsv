@@ -1,0 +1,7 @@
+DMS_id	organism	taxon	seq_len	windows	n_mutants	spearman_masked	spearman_wt	published_masked	difference	seconds
+BLAT_ECOLX_Stiffler_2015	Escherichia coli	Prokaryote	286	single	4996	0.7315	0.7228	0.731	0.0005	4.8
+KCNJ2_MOUSE_Coyote-Maestas_2022_function	Mus musculus	Eukaryote	428	single	6963	0.3819	0.3713	0.382	-0.0001	10.0
+SC6A4_HUMAN_Young_2021	Homo sapiens	Human	630	single	11576	0.5426	0.5421	0.543	-0.0004	23.7
+UBE4B_MOUSE_Starita_2013	Mus musculus	Eukaryote	1173	multiple	899	0.4585	0.4138	0.459	-0.0005	6.5
+NPC1_HUMAN_Erwood_2022_HEK293T	Homo sapiens	Human	1278	multiple	637	0.6946	0.7068	0.694	0.0006	12.8
+BRCA1_HUMAN_Findlay_2018	Homo sapiens	Human	1863	multiple	1837	0.5153	0.5078	0.515	0.0003	20.7

@@ -40,6 +40,7 @@ import pysam.utils
 
 sys.path.insert(0, str(Path(__file__).parent))
 from blosum import BLOSUM62
+from models import model_tag
 from stats import auroc, bootstrap_ci
 
 from omnimissense.cache import ScoreCache, default_cache_dir
@@ -361,8 +362,11 @@ def main() -> int:
     parser.add_argument("--random-genes", type=int, default=500)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--output", type=Path, default=Path("benchmarks/results/dog_omia.tsv"))
+    parser.add_argument(
+        "--output", type=Path, help="default: benchmarks/results/dog_omia_<model>.tsv"
+    )
     args = parser.parse_args()
+    args.output = args.output or Path(f"benchmarks/results/dog_omia_{model_tag(args.model)}.tsv")
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     for name in ("dog_omia", "omnimissense"):
         logging.getLogger(name).setLevel(logging.INFO)

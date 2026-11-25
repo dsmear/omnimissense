@@ -26,6 +26,7 @@ import pyarrow.parquet as pq
 from huggingface_hub import hf_hub_download
 
 sys.path.insert(0, str(Path(__file__).parent))
+from models import model_tag
 from stats import spearman
 
 from omnimissense.defaults import DEFAULT_MODEL
@@ -112,8 +113,11 @@ def main() -> int:
     parser.add_argument("--assays", nargs="+", default=DEFAULT_ASSAYS + LONG_ASSAYS)
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--data-dir", type=Path, default=Path("data/proteingym"))
-    parser.add_argument("--output", type=Path, default=Path("benchmarks/results/proteingym.tsv"))
+    parser.add_argument(
+        "--output", type=Path, help="default: benchmarks/results/proteingym_<model>.tsv"
+    )
     args = parser.parse_args()
+    args.output = args.output or Path(f"benchmarks/results/proteingym_{model_tag(args.model)}.tsv")
     logging.basicConfig(level=logging.WARNING, format="%(asctime)s %(message)s", datefmt="%H:%M:%S")
     for name in ("proteingym", "omnimissense"):
         logging.getLogger(name).setLevel(logging.INFO)
@@ -197,6 +201,9 @@ def main() -> int:
             f"| {r['spearman_masked']:.3f} | {r['published_masked']:.3f} "
             f"| {r['difference']:+.3f} | {r['spearman_wt']:.3f} |"
         )
+    if column is None:
+        print("\nProteinGym publishes no reference for this model: no pass/fail check.")
+        return 0
     strict = [r for r in rows if r["windows"] == "single"]
     failures = [r for r in strict if not abs(r["difference"]) <= TOLERANCE]
     if failures:

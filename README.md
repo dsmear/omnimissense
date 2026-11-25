@@ -106,7 +106,10 @@ ref_aa alt_aa protein_length n_windows wt_marginal masked_marginal status`
 
 ## Validation
 
-Scripts and details: [benchmarks/README.md](benchmarks/README.md). Results: `benchmarks/results/`.
+Scripts and details: [benchmarks/README.md](benchmarks/README.md). Results, one file per
+model: `benchmarks/results/`. Two models are benchmarked: **ESM-2 650M** and **VESM 650M**
+(an ESM-2 re-trained for variant effects; scored with the wild-type marginal, as its authors
+do).
 
 **Implementation checks**
 
@@ -116,17 +119,18 @@ Scripts and details: [benchmarks/README.md](benchmarks/README.md). Results: `ben
 - **Proteome:** the dog proteome translated from FASTA + GFF3 is identical to Ensembl's
   published peptides for 43,524 / 43,524 transcripts (the only exclusion is one
   selenoprotein, see limitations).
-- **ProteinGym** (`benchmarks/proteingym.py`): Spearman correlation between our masked-marginal
-  scores and experimental fitness, against the value ProteinGym publishes for ESM-2 650M.
+- **ProteinGym** (`benchmarks/proteingym.py`): Spearman correlation between scores and
+  experimental fitness. Our ESM-2 masked marginals reproduce the values ProteinGym publishes
+  for ESM-2 650M; ProteinGym publishes no VESM values.
 
-| DMS assay | organism | length | mutants | ours | published |
-|---|---|---|---|---|---|
-| BLAT_ECOLX_Stiffler_2015 | *E. coli* | 286 | 4,996 | 0.732 | 0.731 |
-| KCNJ2_MOUSE_Coyote-Maestas_2022_function | mouse | 428 | 6,963 | 0.382 | 0.382 |
-| SC6A4_HUMAN_Young_2021 | human | 630 | 11,576 | 0.543 | 0.543 |
-| UBE4B_MOUSE_Starita_2013 | mouse | 1,173 | 899 | 0.459 | 0.459 |
-| NPC1_HUMAN_Erwood_2022_HEK293T | human | 1,278 | 637 | 0.695 | 0.694 |
-| BRCA1_HUMAN_Findlay_2018 | human | 1,863 | 1,837 | 0.515 | 0.515 |
+| DMS assay | organism | length | mutants | ESM-2 (ours) | ESM-2 (published) | VESM (ours) |
+|---|---|---|---|---|---|---|
+| BLAT_ECOLX_Stiffler_2015 | *E. coli* | 286 | 4,996 | 0.732 | 0.731 | **0.774** |
+| KCNJ2_MOUSE_Coyote-Maestas_2022_function | mouse | 428 | 6,963 | 0.382 | 0.382 | **0.390** |
+| SC6A4_HUMAN_Young_2021 | human | 630 | 11,576 | 0.543 | 0.543 | **0.562** |
+| UBE4B_MOUSE_Starita_2013 | mouse | 1,173 | 899 | **0.459** | 0.459 | 0.452 |
+| NPC1_HUMAN_Erwood_2022_HEK293T | human | 1,278 | 637 | 0.695 | 0.694 | **0.725** |
+| BRCA1_HUMAN_Findlay_2018 | human | 1,863 | 1,837 | 0.515 | 0.515 | **0.523** |
 
 The last three are longer than 1022 residues and use our sliding windows.
 
@@ -135,29 +139,26 @@ proteins, against Dog10K missense variants with allele frequency ≥ 5% among 1,
 (UU_Cfam_GSD_1.0, annotated by omnimissense). AUROC with 95% bootstrap interval; BLOSUM62 is a
 context-free baseline (amino-acid similarity only).
 
-| causal set | common variants | n causal / common | ESM-2 masked | ESM-2 wild-type | BLOSUM62 |
+| causal set | common variants | n causal / common | ESM-2 | VESM | BLOSUM62 |
 |---|---|---|---|---|---|
-| pathogenic (AVCG P/LP) | all | 49 / 521 | **0.962** (0.926–0.988) | 0.954 (0.918–0.983) | 0.678 |
-| pathogenic (AVCG P/LP) | same genes | 49 / 33 | **0.947** (0.890–0.987) | 0.934 (0.869–0.981) | 0.613 |
-| disease (P/LP + not yet classified) | all | 118 / 521 | 0.945 (0.919–0.969) | 0.943 (0.916–0.966) | 0.650 |
-| disease | same genes | 118 / 104 | 0.938 (0.904–0.966) | 0.932 (0.897–0.961) | 0.647 |
-| coat/hair **traits** | all | 15 / 521 | 0.968 (0.912–0.999) | 0.968 (0.915–0.998) | 0.728 |
-| pathogenic **vs OMIA traits** | — | 49 / 15 | 0.437 (0.282–0.593) | 0.461 (0.306–0.620) | 0.437 |
+| pathogenic (AVCG P/LP) | all | 49 / 521 | 0.962 (0.926–0.988) | **0.977** (0.962–0.991) | 0.678 |
+| pathogenic (AVCG P/LP) | same genes | 49 / 33 | 0.947 (0.890–0.987) | **0.961** (0.922–0.989) | 0.613 |
+| disease (P/LP + not yet classified) | all | 118 / 521 | 0.945 (0.919–0.969) | **0.956** (0.932–0.977) | 0.650 |
+| disease | same genes | 118 / 104 | 0.938 (0.904–0.966) | **0.947** (0.915–0.972) | 0.647 |
+| coat/hair **traits** | all | 15 / 521 | 0.968 (0.912–0.999) | 0.946 (0.842–0.999) | 0.728 |
+| pathogenic **vs OMIA traits** | — | 49 / 15 | 0.437 (0.282–0.593) | 0.550 (0.403–0.703) | 0.437 |
 
 How to read it:
 
-- ESM-2 scores separate known dog disease variants from common dog variants far better than
+- Both models separate known dog disease variants from common dog variants far better than
   amino-acid similarity alone, also within the same genes.
-- **Trait variants** (coat colour, hair) look as disruptive as disease variants, and the model
-  cannot tell the two apart (AUROC 0.44, no better than chance). The score measures damage to
-  the protein, not disease. This also explains the low AUROC (0.55–0.61) reported for
-  human-mapped predictors on OMIA when "non-deleterious" (often trait) variants are the
+- **Trait variants** (coat colour, hair) look as disruptive as disease variants, and neither
+  model can tell the two apart (AUROC 0.44–0.55, intervals include chance). The score measures
+  damage to the protein, not disease. This also explains the low AUROC (0.55–0.61) reported
+  for human-mapped predictors on OMIA when "non-deleterious" (often trait) variants are the
   negatives; our numbers are **not** directly comparable with that study.
 - Common variants are an easy negative set (selection has removed damaging alleles from high
-  frequency). Finding the causal variant among the *rare* variants of one dog is harder and
-  is not measured here. Within its own protein, the median pathogenic variant ranks at the
-  32nd percentile of all possible substitutions (wild-type marginal); only 8% fall in the
-  most damaging 10%.
+  frequency); the realistic test below uses rare variants instead.
 - Small sets (49 curated pathogenic variants), OMIA ascertainment bias (variants found in
   candidate genes), and 133 of 176 OMIA records mappable to Ensembl proteins (gene symbol
   missing or different protein numbering for the rest).
@@ -167,38 +168,42 @@ How to read it:
 the rare missense variants it carries (allele frequency < 1%; median 126 per dog). Each
 causal OMIA variant is inserted in turn among each dog's candidates and ranked. The same
 variants are also scored the way people do today without a dog tool: map the variant to the
-human ortholog (same gene, aligned residue must be identical) and use a human score: ESM-2 on
-the human protein, or AlphaMissense.
+human ortholog (same gene, aligned residue must be identical) and use a human score: the same
+model on the human protein, or AlphaMissense.
 
 | 49 pathogenic variants × 50 dogs | median rank | top-1 | top-5 | top-10 |
 |---|---|---|---|---|
-| **omnimissense** (ESM-2 on the dog protein) | 6 | 19% | 46% | 66% |
+| **omnimissense + VESM** (dog protein) | **4** | 21% | 59% | **72%** |
+| omnimissense + ESM-2 (dog protein) | 6 | 19% | 46% | 66% |
+| VESM on the human ortholog | 4 | 22% | 61% | 73% |
 | ESM-2 on the human ortholog | 6 | 19% | 49% | 67% |
 | AlphaMissense (human) | 4 | 26% | 60% | 75% |
 | BLOSUM62 | 40.5 | 0% | 1% | 13% |
 
 | AUROC, pathogenic vs rare variants | all variants (49 / 7,581) | scored by every method (48 / 4,180) |
 |---|---|---|
-| **omnimissense** | 0.913 | 0.882 |
+| **omnimissense + VESM** | **0.927** | **0.903** |
+| omnimissense + ESM-2 | 0.913 | 0.882 |
+| VESM on the human ortholog | 0.932 | 0.904 |
 | ESM-2 on the human ortholog | 0.915 | 0.874 |
 | AlphaMissense (human) | 0.936 | 0.912 |
 
 What this says:
 
-- **Dog protein vs human protein, same model:** on the variants both can score, scoring the
-  dog's own protein is slightly but consistently better (+0.007 to +0.019 AUROC; the paired
-  95% interval is at or above zero in three of four comparisons, e.g. disease vs common
-  +0.005 to +0.032, and −0.002 to +0.026 in the fourth).
+- **The model matters most.** VESM puts the causal variant in the top 10 of ~126 rare
+  missense candidates in 72% of the trials (ESM-2: 66%), close to AlphaMissense (75%); the
+  paired AUROC difference VESM − AlphaMissense is not significant (−0.035 to +0.019 on all
+  variants). VESM is MIT-licensed and works for any species; AlphaMissense covers human
+  proteins only and has a non-commercial license.
+- **Dog protein vs human protein, same model:** a small gain for the dog protein with ESM-2
+  (+0.007 to +0.019 AUROC; paired interval at or above zero in three of four comparisons), no
+  difference with VESM (−0.008 to +0.006). Scoring the species' own protein is not, by
+  itself, what makes the scores better.
 - **Coverage:** the human workaround can score only 56% of the dogs' rare missense variants
   and 41% of the common ones (the human residue differs or there is no human entry), but 96%
   of the causal variants, which sit on conserved residues. Unscorable variants are mostly
   benign, so for ranking they cost the workaround little in the dog, a species close to
-  human. omnimissense scores 100% of them.
-- **AlphaMissense** (trained with structure and population data, human only, non-commercial
-  license) ranks causal variants better than ESM-2 650M on either protein (top-10: 75% vs
-  66%); the paired AUROC difference is significant in one of four comparisons.
-- In a real dog genome, omnimissense puts the causal variant in the top 10 of ~126 rare
-  missense candidates two times out of three.
+  human. omnimissense scores 100% of them, which should matter more in species far from human.
 
 ## Limitations
 
@@ -249,7 +254,8 @@ redistributed: they are downloaded from Hugging Face on first use. Select a mode
 | ESM-2 650M (`facebook/esm2_t33_650M_UR50D`) | default | MIT |
 | other ESM-2 sizes (e.g. `facebook/esm2_t30_150M_UR50D`) | supported, same architecture | MIT |
 | ESM1b (`facebook/esm1b_t33_650M_UR50S`) | should work, untested | MIT |
-| VESM 35M–3B (`ntranoslab/vesm`) | planned | MIT |
+| VESM 650M (`ntranoslab/vesm/VESM_650M`) | supported; re-trained ESM-2, applied on top of the ESM-2 checkpoint (revision pinned) | MIT |
+| VESM 35M / 150M / 3B (`ntranoslab/vesm/VESM_…`) | supported, not benchmarked (3B needs > 8 GB of GPU memory) | MIT |
 | VESM3, ESM3 | **not supported**: non-commercial license | — |
 
 ## Citation
