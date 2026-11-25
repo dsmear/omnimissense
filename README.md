@@ -38,12 +38,15 @@ It outputs the same VCF (all records, all samples) with protein-language-model s
    (bundled in pysam, nothing to install), one record at a time, for every ALT allele.
 3. **Proteins** are translated from the FASTA + GFF3. The reference amino acid reported by
    csq must match the translated protein; mismatches are reported (`ref_aa_mismatch`).
-4. **Scores** come from ESM-2 650M (fp16 on GPU), as log-likelihood ratios
+4. **Scores** come from a protein language model, by default **VESM 650M** (an ESM-2 650M
+   re-trained for variant effects, MIT license; fp16 on GPU), as log-likelihood ratios
    `log P(alt) − log P(ref)` at the mutated position (more negative = more likely damaging):
-   - `wt_marginal`: one forward pass per protein gives all 19 substitutions at every position;
-     the whole proteome can be precomputed once (`omnimissense precompute`).
-   - `masked_marginal`: the position is masked and predicted from its context; one forward
-     pass per position, computed only for the variants in the VCF.
+   - `wt_marginal` (default): one forward pass per protein gives all 19 substitutions at
+     every position; the whole proteome can be precomputed once (`omnimissense precompute`),
+     after which annotating a VCF takes seconds.
+   - `masked_marginal` (`--masked`): the position is masked and predicted from its context;
+     one forward pass per position, computed only for the variants in the VCF. Usually the
+     better mode for plain ESM-2, not for VESM (see Validation).
    - Proteins longer than 1022 residues are split into 1022-residue windows overlapping by
      511; each residue's scores are a weighted average over the windows that contain it, with
      weights fading near artificial window edges (scheme of Brandes et al. 2023).
@@ -65,7 +68,7 @@ cd ../..
 FASTA=data/dog/Canis_lupus_familiaris.ROS_Cfam_1.0.dna.toplevel.fa.gz
 GFF3=data/dog/Canis_lupus_familiaris.ROS_Cfam_1.0.116.gff3.gz
 
-# optional, once: score the whole proteome into the cache
+# optional, once: score the whole proteome into the cache (default model: VESM 650M)
 uv run omnimissense precompute --fasta $FASTA --gff3 $GFF3
 
 uv run omnimissense annotate --vcf my_dogs.vcf.gz --fasta $FASTA --gff3 $GFF3 \
@@ -83,7 +86,7 @@ the original, because random access needs it.
 |---|---|---|
 | `OMS` | `.` | one entry per missense consequence: `Allele\|Gene\|Transcript\|Canonical\|ProteinPos\|RefAA\|AltAA\|WTMarginal\|MaskedMarginal\|Status` |
 | `OMS_WT` | `A` | lowest (most damaging) wild-type-marginal score across transcripts, per ALT allele |
-| `OMS_MM` | `A` | lowest masked-marginal score across transcripts, per ALT allele |
+| `OMS_MM` | `A` | lowest masked-marginal score across transcripts, per ALT allele (only with `--masked`) |
 | `OMS_REF_MISMATCH` | flag | the REF allele does not match the genome; record not annotated |
 | `BCSQ` | `.` | consequences from bcftools csq (all consequence types) |
 
@@ -98,10 +101,11 @@ ref_aa alt_aa protein_length n_windows wt_marginal masked_marginal status`
 
 | Step | Measured |
 |---|---|
-| Wild-type marginals, ESM-2 650M fp16 | ~12,400 residues/s, 1.6 GiB peak VRAM |
-| Whole dog proteome (`precompute`) | 43,092 unique proteins, 26.7 M residues in 36 min; cache 1.4 GB |
-| Masked marginals | 15–28 positions/s, depending on protein length |
-| Annotate 127,270 dog variants (chr38, 0–5 Mb; 1,689 missense consequences) | 137 s on first run, 13 s when the scores are cached (1.4 GB RAM) |
+| Wild-type marginals, 650M model fp16 (ESM-2 and VESM have the same size) | ~12,400 residues/s, 1.6 GiB peak VRAM |
+| Whole dog proteome (`precompute`, ESM-2) | 43,092 unique proteins, 26.7 M residues in 36 min; cache 1.4 GB |
+| Masked marginals (`--masked`) | 15–28 positions/s, depending on protein length |
+| Annotate 127,270 dog variants (chr38, 0–5 Mb; 1,689 missense consequences), default settings | 25 s on first run, 12 s when the proteins are cached (1.2 GB RAM) |
+| Same, with `--masked` (ESM-2) | 137 s on first run, 13 s when cached |
 | Proteome translation | ~10 s (after the one-off BGZF conversion of the genome, ~3 min) |
 
 ## Validation
@@ -251,10 +255,10 @@ redistributed: they are downloaded from Hugging Face on first use. Select a mode
 
 | Model | Status | License |
 |---|---|---|
-| ESM-2 650M (`facebook/esm2_t33_650M_UR50D`) | default | MIT |
+| ESM-2 650M (`facebook/esm2_t33_650M_UR50D`) | supported (reference model of the benchmarks) | MIT |
 | other ESM-2 sizes (e.g. `facebook/esm2_t30_150M_UR50D`) | supported, same architecture | MIT |
 | ESM1b (`facebook/esm1b_t33_650M_UR50S`) | should work, untested | MIT |
-| VESM 650M (`ntranoslab/vesm/VESM_650M`) | supported; re-trained ESM-2, applied on top of the ESM-2 checkpoint (revision pinned) | MIT |
+| VESM 650M (`ntranoslab/vesm/VESM_650M`) | **default**; re-trained ESM-2, applied on top of the ESM-2 checkpoint (revision pinned) | MIT |
 | VESM 35M / 150M / 3B (`ntranoslab/vesm/VESM_…`) | supported, not benchmarked (3B needs > 8 GB of GPU memory) | MIT |
 | VESM3, ESM3 | **not supported**: non-commercial license | — |
 

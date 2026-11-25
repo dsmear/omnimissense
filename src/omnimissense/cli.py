@@ -20,7 +20,11 @@ app = typer.Typer(
 )
 
 ModelOption = Annotated[
-    str, typer.Option(help="Hugging Face ID of an ESM-style masked language model.")
+    str,
+    typer.Option(
+        help="ESM-style masked language model: a Hugging Face ID such as "
+        "facebook/esm2_t33_650M_UR50D, or ntranoslab/vesm/VESM_<size>."
+    ),
 ]
 FastaOption = Annotated[
     Path,
@@ -109,7 +113,13 @@ def annotate(
     ] = None,
     model: ModelOption = DEFAULT_MODEL,
     cache_dir: CacheOption = None,
-    masked: Annotated[bool, typer.Option(help="Also compute masked-marginal scores.")] = True,
+    masked: Annotated[
+        bool,
+        typer.Option(
+            help="Also compute masked-marginal scores (OMS_MM): one forward pass per variant "
+            "position, much slower; the default score is the wild-type marginal (OMS_WT)."
+        ),
+    ] = False,
     device: DeviceOption = None,
     max_tokens: MaxTokensOption = DEFAULT_MAX_TOKENS,
     threads: Annotated[int, typer.Option(help="Extra bcftools threads.")] = 0,

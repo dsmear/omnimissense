@@ -125,6 +125,7 @@ def test_second_run_reads_scores_from_cache(synthetic, tmp_path, tiny_scorer) ->
         cache=ScoreCache(tmp_path / "cache", "tiny"),
         scorer_factory=no_model,
         model_name="tiny",
+        masked=True,
     )
     assert [v.masked_marginal for v in second.variants] == [
         v.masked_marginal for v in first.variants

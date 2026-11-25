@@ -2,8 +2,9 @@
 
 Reproducible validation scripts. Downloaded data go to `data/` (never committed); only
 aggregate results are written to `benchmarks/results/`, one file per model
-(`*_esm2_650m.tsv`, `*_vesm_650m.tsv`). Every script takes `--model`, e.g.
-`--model ntranoslab/vesm/VESM_650M`; the default is ESM-2 650M.
+(`*_esm2_650m.tsv`, `*_vesm_650m.tsv`). Every script takes `--model`; the default is the
+omnimissense default (VESM 650M), except `proteingym.py`, which defaults to ESM-2 650M because
+ProteinGym publishes reference values for it.
 
 ## 1. ProteinGym: implementation sanity check
 

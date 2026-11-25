@@ -18,7 +18,7 @@ UBIQUITIN = "MQIFVKTLTGKTITLEVEPSDTIENVKAKIQDKEGIPPDQQRLIFAGKQLEDGRTLSDYNIQKESTL
 
 @pytest.fixture(scope="module")
 def esm2() -> MaskedLMScorer:
-    return MaskedLMScorer.from_pretrained()
+    return MaskedLMScorer.from_pretrained("facebook/esm2_t33_650M_UR50D")
 
 
 def test_real_model_scores_are_sane(esm2) -> None:

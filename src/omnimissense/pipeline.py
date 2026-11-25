@@ -196,7 +196,7 @@ def score_variants(
     proteins: dict[str, Protein],
     cache: ScoreCache,
     scorer_factory: ScorerFactory,
-    masked: bool = True,
+    masked: bool = False,
 ) -> None:
     """Fill the score fields of variants whose status is OK (in place)."""
     scorer = LazyScorer(scorer_factory)
@@ -529,7 +529,7 @@ def annotate(
     cache: ScoreCache,
     scorer_factory: ScorerFactory,
     model_name: str,
-    masked: bool = True,
+    masked: bool = False,
     threads: int = 0,
 ) -> AnnotationResult:
     """Annotate missense variants in ``vcf`` with protein language model scores."""

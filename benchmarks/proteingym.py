@@ -29,7 +29,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from models import model_tag
 from stats import spearman
 
-from omnimissense.defaults import DEFAULT_MODEL
+from omnimissense.defaults import ESM2_650M
 from omnimissense.scoring import MaskedLMScorer
 from omnimissense.sequences import AA_INDEX
 
@@ -44,7 +44,7 @@ REFERENCE_FILE = "reference_files/DMS_substitutions.csv"
 PUBLISHED_FILE = (
     "benchmarks/DMS_zero_shot/substitutions/Spearman/DMS_substitutions_Spearman_DMS_level.csv"
 )
-PUBLISHED_COLUMN = {DEFAULT_MODEL: "ESM2 (650M)"}
+PUBLISHED_COLUMN = {ESM2_650M: "ESM2 (650M)"}
 
 #: One prokaryote, one non-human mammal, one human assay; all single mutants, all <= 1022 aa.
 DEFAULT_ASSAYS = [
@@ -111,7 +111,8 @@ def score_assay(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--assays", nargs="+", default=DEFAULT_ASSAYS + LONG_ASSAYS)
-    parser.add_argument("--model", default=DEFAULT_MODEL)
+    # ESM-2 by default: ProteinGym publishes reference values for it (implementation check)
+    parser.add_argument("--model", default=ESM2_650M)
     parser.add_argument("--data-dir", type=Path, default=Path("data/proteingym"))
     parser.add_argument(
         "--output", type=Path, help="default: benchmarks/results/proteingym_<model>.tsv"
