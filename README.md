@@ -83,6 +83,12 @@ uv run omnimissense export --fasta $FASTA --gff3 $GFF3 -o dog_scores.parquet
 The plain-gzip FASTA distributed by Ensembl is recompressed once to BGZF (`.fa.bgz`) next to
 the original, because random access needs it.
 
+**Other species.** Any assembly with an Ensembl or NCBI RefSeq annotation works the same way.
+From NCBI, take `<assembly>_genomic.fna.gz` and `<assembly>_genomic.gff.gz` from the
+assembly's FTP folder (e.g. `genomes/all/GCF/000/146/045/GCF_000146045.2_R64/` for yeast);
+transcript IDs are then NCBI's (`rna-NM_…`, `rna-XM_…`). The VCF must use the same sequence
+names as the FASTA (NCBI: accessions such as `NC_001133.9`).
+
 ## Precomputed scores
 
 | Species | Assembly / annotation | Model | Dataset |
@@ -137,6 +143,10 @@ do).
 - **Proteome:** the dog proteome translated from FASTA + GFF3 is identical to Ensembl's
   published peptides for 43,524 / 43,524 transcripts (the only exclusion is one
   selenoprotein, see limitations).
+- **NCBI RefSeq annotation** (`benchmarks/ncbi_translation.py`): yeast *S. cerevisiae* R64
+  (GCF_000146045.2), read without conversion; 6,002 / 6,002 proteins identical to NCBI's
+  translation of the same CDS. The other 25 are 19 mitochondrial transcripts (skipped, see
+  limitations) and 6 ORFs that NCBI itself marks as pseudogenes (internal stop codons).
 - **ProteinGym** (`benchmarks/proteingym.py`): Spearman correlation between scores and
   experimental fitness. Our ESM-2 masked marginals reproduce the values ProteinGym publishes
   for ESM-2 650M; ProteinGym publishes no VESM values.
