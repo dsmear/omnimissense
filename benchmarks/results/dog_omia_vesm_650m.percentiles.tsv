@@ -1,0 +1,7 @@
+percentile_below	all_possible_missense	causal_pathogenic	causal_disease	causal_trait	common
+1	0.01	0.0	0.008	0.0	0.0
+5	0.05	0.163	0.144	0.067	0.0
+10	0.1	0.408	0.322	0.267	0.0
+20	0.2	0.633	0.559	0.667	0.0
+30	0.3	0.776	0.737	0.8	0.023
+50	0.5	0.898	0.881	0.933	0.094

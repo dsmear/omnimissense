@@ -14,3 +14,11 @@ causal_genes	109
 common_missense_same_genes	118
 common_missense_random_genes	403
 common_removed_as_causal	3
+proteome_percentile_median_pathogenic	12.05
+proteome_percentile_below5_pathogenic	0.163
+proteome_percentile_median_disease	15.98
+proteome_percentile_below5_disease	0.144
+proteome_percentile_median_trait	15.92
+proteome_percentile_below5_trait	0.067
+proteome_percentile_median_common	82.22
+proteome_percentile_below5_common	0.0
