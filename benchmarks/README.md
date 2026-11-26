@@ -121,3 +121,26 @@ csq, as in `omnimissense annotate`) and compares each protein with NCBI's own tr
 the same CDS (`*_translated_cds.faa.gz`, from the assembly's FTP folder), matched by the CDS
 `protein_id`. Differences are listed with the first differing residue. Mitochondrial
 transcripts are expected to be skipped (status `mitochondrial`).
+
+## 5. ProteinGym, all assays: how well do the scores hold far from human?
+
+```bash
+uv run python benchmarks/proteingym_all.py                                    # VESM 650M
+uv run python benchmarks/proteingym_all.py --model facebook/esm2_t33_650M_UR50D
+uv run python benchmarks/proteingym_all.py --model facebook/esm2_t33_650M_UR50D --masked
+```
+
+Scores all 217 ProteinGym substitution assays (2.47 M mutants, 187 distinct proteins: human
+96 assays, other eukaryotes 40, prokaryotes 50, viruses 31). A multiple mutant gets the sum
+of its single-substitution scores, as ProteinGym does for single-sequence models. Spearman
+correlations are aggregated as ProteinGym does (mean per UniProt protein, then per taxon;
+overall: mean over the five function types; this reproduces the published summary to 0.001)
+and printed next to published models on the same assays, with the difference from ESM-2
+650M and a 95% bootstrap interval over proteins.
+
+Wild-type marginals (default) take one forward pass per protein: minutes on a GPU.
+`--masked` adds one pass per mutated position (hours); with ESM-2 650M it also checks our
+masked marginals against ProteinGym's own ESM-2 scores on every single-window assay. Results
+are appended per assay to `results/proteingym_all_<model>.tsv` (an interrupted run resumes;
+delete the file to start over) and summarised in `results/proteingym_all_<model>.summary.tsv`.
+Same data and pinned revisions as section 1.
