@@ -63,7 +63,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from blosum import BLOSUM62
 from dog_omia import ProteinVariant, fetch, gene_index, parse_protein_changes, read_omia
 from models import model_tag
-from stats import auroc, bootstrap_ci, bootstrap_diff_ci
+from stats import auroc, bootstrap_ci, bootstrap_diff_ci, percentile_table
 
 from omnimissense.cache import ScoreCache, default_cache_dir
 from omnimissense.defaults import DEFAULT_MODEL
@@ -406,6 +406,15 @@ def extract_common_snvs(
     return len(body)
 
 
+def write_rows(path: Path, rows: list[dict[str, object]]) -> None:
+    """Tab-separated table with a header line."""
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]), delimiter="\t",
+                                lineterminator="\n")  # fmt: skip
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def write_cds_bed(transcripts: list[Transcript], path: Path) -> None:
     """BED of the CDS segments, one line per segment (sorted)."""
     rows = sorted((tx.seqid, s.start - 1, s.end) for tx in transcripts for s in tx.cds)
@@ -707,14 +716,15 @@ def main() -> int:
             )
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(rows[0]), delimiter="\t",
-                                lineterminator="\n")  # fmt: skip
-        writer.writeheader()
-        writer.writerows(rows)
+    write_rows(args.output, rows)
     args.output.with_suffix(".summary.tsv").write_text(
         "".join(f"{k}\t{v}\n" for k, v in summary.items())
     )
+    if proteome_pct is not None:
+        thresholds = percentile_table(
+            proteome_pct, {**{f"causal_{k}": v for k, v in causal_sets.items()}, "common": common}
+        )
+        write_rows(args.output.with_suffix(".percentiles.tsv"), thresholds)
 
     print(f"\nModel: {args.model}")
     print("| causal | negatives | subset | causal/negative | " + " | ".join(methods) + " |")
@@ -734,6 +744,13 @@ def main() -> int:
     print()
     for k, v in summary.items():
         print(f"{k}: {v}")
+
+    if proteome_pct is not None:
+        print("\nShare of variants below each proteome-wide percentile (OMS_WT_PCT):")
+        print("| below | " + " | ".join(list(thresholds[0])[1:]) + " |")
+        print("|---" * len(thresholds[0]) + "|")
+        for row in thresholds:
+            print(" | ".join(["", *(str(v) for v in row.values()), ""]).strip())
 
     # per causal variant: printed only (OMIA data are not written to the repository)
     common_wt = -table["chicken_wt"][common]

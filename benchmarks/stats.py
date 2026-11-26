@@ -68,3 +68,33 @@ def bootstrap_diff_ci(
         values.append(auroc(labels[idx], a[idx]) - auroc(labels[idx], b[idx]))
     low, high = np.percentile(values, [2.5, 97.5])
     return float(low), float(high)
+
+
+#: Proteome-wide percentile thresholds reported by the benchmarks.
+PERCENTILE_THRESHOLDS = (1, 5, 10, 20, 30, 50)
+
+
+def percentile_table(
+    percentiles: np.ndarray,
+    groups: dict[str, np.ndarray],
+    thresholds: tuple[float, ...] = PERCENTILE_THRESHOLDS,
+) -> list[dict[str, object]]:
+    """Share of each group's variants below each proteome-wide percentile threshold.
+
+    ``groups`` maps a name to a boolean mask over ``percentiles``; empty groups are left out.
+    ``all_possible_missense`` is the share of the reference distribution (every possible
+    missense SNV of the genome's canonical transcripts) below the threshold, i.e. the
+    threshold itself, for comparison.
+    """
+    percentiles = np.asarray(percentiles, dtype=np.float64)
+    rows = []
+    for threshold in thresholds:
+        row: dict[str, object] = {
+            "percentile_below": threshold,
+            "all_possible_missense": round(threshold / 100, 3),
+        }
+        for name, mask in groups.items():
+            if mask.any():
+                row[name] = round(float((percentiles[mask] < threshold).mean()), 3)
+        rows.append(row)
+    return rows
