@@ -283,7 +283,7 @@ protein → writes them to the VCF `INFO` field.
 | **Result, VESM 650M wild-type marginal, all 217 assays** (run by the user on the RTX 3070, 2026-11-26) | Overall (by function) **0.457** (ESM-2 650M published 0.414; VESM − ESM-2 +0.043, 95% CI +0.024 to +0.063). Human 0.474 (+0.017, +0.001 to +0.034); other eukaryotes 0.517 (+0.031, −0.022 to +0.090); prokaryotes 0.481 (+0.023, −0.005 to +0.057); **viruses 0.426** (+0.165, +0.100 to +0.231). Same assays, published: GEMME 0.455 / 0.469 / 0.516 / 0.467 / 0.472; TranceptEVE L 0.456 / … / 0.461; VenusREM 0.518 / 0.529 / 0.582 / 0.549 / 0.492. Leaderboard position: overall 17th of 98 (human 14th, other eukaryotes 26th, prokaryotes 25th, viruses 21st); best published single-sequence model VespaG 0.458 (viruses: VESPA 0.443). |
 | Interpretation | For cellular organisms the model does not degrade away from human: eukaryotic and prokaryotic proteins score at least as well as human ones, on par with alignment-based methods. Viruses remain the weakest taxon but VESM recovers most of ESM-2's deficit. |
 | ESM-2 650M wild-type marginal, all 217 assays (user's GPU; per-assay files pushed by the user, `benchmarks/results/proteingym_all_{vesm,esm2}_650m*.tsv`) | Overall 0.418, human 0.458, other eukaryotes 0.519, prokaryotes 0.464, viruses 0.260; vs published ESM-2 masked +0.008 overall (−0.002 to +0.018): scoring mode makes little difference for ESM-2, and our implementation agrees with ProteinGym's. **VESM − ESM-2, same scoring, paired by protein:** all +0.036 (+0.021 to +0.052), human +0.017 (+0.003 to +0.030), other eukaryotes −0.001 (−0.029 to +0.025), prokaryotes +0.017 (−0.004 to +0.040), **viruses +0.167 (+0.103 to +0.230)**, VESM better on 25 of 31 viral assays. The virus gain is the model's. Wild-type marginals for all 217 assays: about 15 s of GPU time per model. |
-| Caveats | (1) Resolved: see the ESM-2 wild-type row. (2) Not checked here whether VESM's training or model selection used ProteinGym data (its authors evaluate on ProteinGym); the dog benchmarks are independent evidence. (3) DMS fitness is a proxy for "damaging", not for disease. |
+| Caveats | (1) Resolved: see the ESM-2 wild-type row. (2) Checked later (see "VESM training data" below): no ProteinGym or other experimental labels in VESM's training or checkpoint selection. (3) DMS fitness is a proxy for "damaging", not for disease. |
 
 ---
 
@@ -357,3 +357,14 @@ protein → writes them to the VCF `INFO` field.
 | `multi_aa_change` now only for changes of protein length; in-frame indels stay unscored | csq calls in-frame indels `inframe_deletion`/`inframe_insertion`, not missense, so they never reach scoring; comparing sequences of different lengths is a different problem. |
 | The percentile of an MNV is the summed score placed on the single-SNV reference | Kept for ranking convenience; documented as an approximation (the reference holds single SNVs). |
 | Test: the synthetic MNV `4WL>4CM` gives exactly W4C + L5M (wild-type and masked) | |
+
+---
+
+## 2026-11-26 — VESM training data vs ProteinGym (leakage check)
+
+| Finding | Source |
+|---|---|
+| VESM is trained on **UniProtKB sequences** (human `UPh` and non-human `UPnh` sets) with **targets produced by the ESM models themselves**: the minimum/aggregated log-likelihood ratios of a pool of 11 ESM models (round 1 `esmin`, then rounds on human and non-human data), and finally distillation from VESM_3B's LLRs. No DMS, ClinVar, AlphaMissense or other experimental labels appear in the training code or configs. | `ntranoslab/vesm` repository, commit `86d8bc7` (2025-10-15): `README.md`, `train.py`, `configs/*.json`, `data/data_generation.ipynb` (reads `UniProtKB_meta_data.pkl`, writes `ESM11_UniProt_min.pkl`) |
+| **Checkpoint selection** uses an unsupervised proxy: Spearman correlation with the ESM-ensemble average (`esm11_avg`) on held-out human UniProt proteins (`ESM11_UPh_base_val.pkl`), minus 0.1 × the correlation with the base model. ProteinGym and ClinVar appear only in `inference.py` (evaluation). | `modelling/EsmCoDistiller.py` (`eval_epoch`), `train.py` |
+| Not verifiable here: whether design choices (number of rounds, aggregation, thresholds, hyperparameters) were tuned by looking at benchmark results; the paper (Nature Methods 2026, doi:10.1038/s41592-026-03050-9) is not reachable from the container. ProteinGym proteins are surely among the UniProtKB training sequences, without labels — as for ESM-2 (UniRef) and every protein language model. | |
+| Conclusion | Our ProteinGym-by-taxon numbers are not inflated by label leakage, as far as the released code shows. The dog benchmarks (OMIA, Dog10K) remain the fully independent evidence. |

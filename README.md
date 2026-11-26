@@ -290,6 +290,10 @@ ProteinGym's published scores (ESM-2: masked marginal).
 - Overall VESM would rank 17th of 98 on the ProteinGym leaderboard, level with the best
   single-sequence model (VespaG, 0.458, GPL); the models above it mostly also use protein
   structure and/or alignments.
+- No label leakage, as far as VESM's released training code shows: it is trained on UniProtKB
+  sequences with the ESM models' own scores as targets (no DMS, ClinVar or other experimental
+  labels), and checkpoints are chosen by agreement with the ESM ensemble on held-out human
+  proteins, not on ProteinGym.
 
 **Dog benchmark** (`benchmarks/dog_omia.py`): OMIA dog missense variants mapped to dog
 proteins, against Dog10K missense variants with allele frequency ≥ 5% among 1,872 dogs
