@@ -154,7 +154,8 @@ about 90). Same design as section 2, plus the human-ortholog comparison of secti
 
 1. open <https://omia.org/results/?search_type=advanced&result_type=variant&singlelocus=yes&characterised=yes&species_id=9031>
 2. click the link to download the table as CSV
-3. save it as `data/omia/omia_chicken_variants.csv`
+3. save it as `data/omia/omia_chicken_variants.csv` (the export may hold every species; the
+   script keeps the chicken rows)
 
 **Step 2 — run:**
 
@@ -162,23 +163,33 @@ about 90). Same design as section 2, plus the human-ortholog comparison of secti
 uv run --group benchmarks python benchmarks/chicken_omia.py
 ```
 
-The script downloads the Ensembl 116 chicken assembly (GRCg7b, ~0.35 GB) and reads the
-EVA population VCF remotely, sequence by sequence (only the coding sequence of the selected
+The script downloads the Ensembl 116 chicken assembly (GRCg7b, ~0.35 GB) and the RefSeq
+proteins cited by OMIA (NCBI E-utilities, a few kB), and reads the EVA population VCF remotely, sequence by sequence (only the coding sequence of the selected
 genes; the 12 GB file is not downloaded; pass `--population-vcf <path>` to use a local
 copy). The human-ortholog methods use the AlphaMissense and UniProt files of section 3; if
 they are missing, they are skipped with a warning.
 
-- **Causal sets:** OMIA chicken variants whose effect is "missense", mapped to GRCg7b
-  proteins by gene symbol and amino-acid change (the reference residue must match; canonical
-  transcript tried first). `disease` = phenotypes other than traits; `trait` = plumage,
-  skin, comb and eggshell phenotypes (listed explicitly in the script).
+- **Causal sets:** OMIA chicken variants whose effect is "missense". OMIA numbers them on
+  a RefSeq protein (`NP_…`), which often differs from the Ensembl protein (another start
+  codon or isoform: EDNRB2, MLPH, FMO3, CDKN2A, CD320 and TNFRSF10B are shifted), so each
+  change is located on the cited RefSeq protein and carried to the Ensembl protein of the
+  gene by global alignment (canonical transcript first). Where the aligned Ensembl residue
+  is the alternative one, the reference genome (a broiler) carries the variant allele
+  (MC1R M71T and E92K, SLC45A2 L347M, CDKN2A R10C in OMIA's numbering); the variant is
+  scored on the Ensembl protein with the reference residue restored. `disease` = the four
+  disease variants (analphalipoproteinaemia, muscular dystrophy, restricted ovulator,
+  trimethylaminuria); `trait` = plumage colour and pattern, virus resistance and a blood
+  group (listed in the script); `all` = both, the main analysis (21 distinct variants in the
+  OMIA export of 2026-11-26).
 - **Common set:** PASS biallelic SNVs whose ALT allele frequency is ≥ 5% among the 96
   Bangladeshi native chickens of EVA study PRJEB78357 (three varieties, improved and
   unimproved lines, 16 birds each; GRCg7b, autosomes), missense in the canonical transcript
   of (a) the genes of the causal set and (b) 500 autosomal protein-coding genes drawn at
   random (seed 0) minus the causal genes. Variants present in both sets are dropped from the
-  common set. Z-linked causal genes have no same-gene common variants (the VCF has autosomes
-  only).
+  common set, as are common variants at the site of a causal variant (in either direction:
+  where the reference carries the variant allele, the population variant is the reverse
+  change). Z-linked causal genes (5 of 14) have no same-gene common variants: the VCF has
+  autosomes only.
 - **Methods:** the model on the chicken protein (masked and wild-type marginal), the same
   model on the human ortholog, AlphaMissense (human ortholog; mapping as in section 3) and
   BLOSUM62. AUROC with a 95% stratified bootstrap interval on all variants (a variant the
@@ -188,11 +199,14 @@ they are missing, they are skipped with a warning.
   differences.
 - **Percentiles:** percentile of each variant among the 19 × L substitutions of its protein
   and, if `omnimissense precompute` was run on the same FASTA and GFF3 (no other options),
-  the proteome-wide percentile (`OMS_WT_PCT`) of causal and common variants.
+  the proteome-wide percentile (`OMS_WT_PCT`) of causal and common variants. With so few
+  causal variants, the script also prints one line per causal variant (not written to the
+  repository).
 
 **Data sources and terms**
 
 - OMIA: as in section 2.
+- RefSeq proteins: NCBI, fetched with E-utilities (`efetch`, protein FASTA) by accession.
 - Bangladeshi native chickens: EVA study PRJEB78357, *Whole Genome Sequencing of Bangladeshi
   Native Chicken*, <https://www.ebi.ac.uk/eva/?eva-study=PRJEB78357>. Variants are read to
   compute aggregate metrics only; nothing is redistributed.

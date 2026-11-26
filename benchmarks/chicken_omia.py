@@ -5,18 +5,23 @@ about 90). The benchmark asks whether the scores of the chicken protein itself h
 far from human, and compares them with the usual workaround for non-human species: mapping
 the variant onto the human ortholog and scoring it there (the same model, or AlphaMissense).
 
-Causal sets (OMIA chicken variants whose effect is "missense", mapped to Ensembl 116 GRCg7b
-proteins by gene symbol and amino-acid change; the reference residue must match; canonical
-transcript tried first):
-  pathogenic  AVCG classification P, LP or LP/P (if any)
-  disease     pathogenic + phenotypes not yet classified, traits excluded (main analysis)
-  trait       plumage, skin, comb, eggshell ... phenotypes listed in TRAITS (informational:
-              an altered protein, no disease)
+Causal sets: OMIA chicken variants whose effect is "missense". OMIA numbers them on a RefSeq
+protein (NP_...), which often differs from the Ensembl 116 GRCg7b protein (other start
+codon, other isoform), so each change is located on the cited RefSeq protein (fetched from
+NCBI) and carried to the Ensembl protein of the same gene by global alignment (canonical
+transcript first); the aligned Ensembl residue must be the reference one. Where it is the
+alternative one, the reference genome (a broiler) carries the variant allele, and the
+variant is scored on the Ensembl protein with the reference residue restored.
+  pathogenic  AVCG classification P, LP or LP/P
+  disease     pathogenic + diseases not yet classified (traits excluded)
+  trait       plumage colour and pattern, virus resistance, blood group (TRAITS)
+  all         disease + trait: every variant OMIA lists as causal (main analysis: chicken
+              has only four disease variants)
 Negatives: PASS biallelic SNVs with ALT allele frequency >= 5% among the 96 Bangladeshi native
 chickens of EVA study PRJEB78357 (three varieties, improved and unimproved lines; GRCg7b,
 autosomes), missense in the canonical transcript of (a) the genes of the causal variants and
 (b) 500 randomly chosen autosomal protein-coding genes; annotated with omnimissense itself.
-Variants in both sets are removed from the negatives.
+Common variants at the site of a causal variant (in either direction) are removed.
 Methods: the model on the chicken protein (omnimissense; masked and wild-type marginal); the
 same model on the human ortholog and AlphaMissense, through the human mapping of
 dog_realistic.py (gene symbol, global alignment, identical reference residue); BLOSUM62.
@@ -39,9 +44,12 @@ import csv
 import hashlib
 import logging
 import random
+import re
 import sys
 import tempfile
 import time
+import urllib.parse
+import urllib.request
 from collections import defaultdict
 from pathlib import Path
 
@@ -52,7 +60,7 @@ import pysam.utils
 
 sys.path.insert(0, str(Path(__file__).parent))
 from blosum import BLOSUM62
-from dog_omia import ProteinVariant, fetch, gene_index, map_omia, read_omia
+from dog_omia import ProteinVariant, fetch, gene_index, parse_protein_changes, read_omia
 from models import model_tag
 from stats import auroc, bootstrap_ci, bootstrap_diff_ci
 
@@ -89,11 +97,33 @@ POPULATION_INDEX = f"{EVA}/BD_chicken_all_autosomes_passedSNPs_Gal7_96samples.vc
 ALPHAMISSENSE = Path("data/alphamissense/AlphaMissense_aa_substitutions.tsv.gz")
 UNIPROT_HUMAN = Path("data/human/uniprot_human_reviewed.tsv")
 
-#: OMIA chicken phenotypes (missense, "Not currently evaluated") that are traits, not
-#: diseases: plumage, skin, comb and eggshell phenotypes. Listed explicitly from the OMIA
-#: export used here.
-TRAITS: set[str] = set()
+EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi"
+
+#: OMIA chicken phenotypes (missense, "Not currently evaluated") that are not diseases:
+#: plumage colour and pattern, virus resistance (loss of a viral receptor) and a blood
+#: group. Listed explicitly from the OMIA export used here (2026-11-26). The diseases are
+#: analphalipoproteinaemia (P), muscular dystrophy and restricted ovulator (LP/P), and
+#: trimethylaminuria (not evaluated).
+TRAITS: set[str] = {
+    "Barring, autosomal",
+    "Blood group H",
+    "Chocolate feathered",
+    "Feather colour, buttercup",
+    "Feather colour, extended black",
+    "Feather colour, lavender",
+    "Feather colour, mottled",
+    "Feather colour, recessive white",
+    "Feather colour, silver",
+    "Feather colour, wheaten-like",
+    "Five gray",
+    "Resistance to avian sarcoma and leukosis viruses, subgroup A",
+    "Resistance to avian sarcoma and leukosis viruses, subgroup B",
+    "Resistance to myxovirus",
+    "Sex-linked barring",
+    "Sex-linked dilution",
+}
 EXCLUDED: set[str] = set()
+_ACCESSION = re.compile(r"^\s*([NXY]P_\d+\.\d+)\s*:")
 
 CHICKEN_METHODS = ("chicken_masked", "chicken_wt", "blosum62")
 HUMAN_METHODS = ("human_masked", "human_wt", "alphamissense")
@@ -104,6 +134,127 @@ DIFFERENCES = (
     ("chicken_masked", "alphamissense"),
     ("chicken_wt", "alphamissense"),
 )
+
+
+# ---------------------------------------------------------------------------- causal variants
+
+
+def protein_accession(text: str) -> str | None:
+    """RefSeq protein accession of an OMIA ``p.`` entry (``NP_989476.1:p.(E89K)``)."""
+    match = _ACCESSION.match(text)
+    return match.group(1) if match else None
+
+
+def read_fasta(path: Path) -> dict[str, str]:
+    """``{first word of the header: sequence}``."""
+    sequences = {}
+    for block in path.read_text().split(">")[1:]:
+        header, *lines = block.splitlines()
+        sequences[header.split()[0]] = "".join(lines).rstrip("*")
+    return sequences
+
+
+def fetch_refseq_proteins(accessions: set[str], path: Path) -> dict[str, str]:
+    """RefSeq protein sequences from NCBI E-utilities, cached in ``path`` (FASTA)."""
+    cached = read_fasta(path) if path.exists() else {}
+    missing = sorted(accessions - cached.keys())
+    if missing:
+        log.info("Fetching %d RefSeq proteins from NCBI", len(missing))
+        query = urllib.parse.urlencode(
+            {"db": "protein", "id": ",".join(missing), "rettype": "fasta", "retmode": "text",
+             "tool": "omnimissense-benchmark"}
+        )  # fmt: skip
+        with urllib.request.urlopen(f"{EUTILS}?{query}", timeout=120) as response:
+            text = response.read().decode()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as handle:
+            handle.write(text if text.endswith("\n") else text + "\n")
+        cached = read_fasta(path)
+    return {a: cached[a] for a in accessions if a in cached}
+
+
+def map_omia_via_refseq(
+    records: list[dict[str, str]],
+    genes: dict[str, list[Transcript]],
+    proteins: dict[str, Protein],
+    refseq: dict[str, str],
+) -> tuple[list[ProteinVariant], dict[str, str], dict[str, int]]:
+    """Map OMIA protein changes onto Ensembl proteins through the RefSeq protein they cite.
+
+    The change is located on the cited RefSeq protein (whose residue must be the reference or,
+    when the RefSeq sequence was built from the variant allele, the alternative one), then
+    carried to each Ensembl protein of the gene (canonical first) by global alignment.
+    Where the Ensembl residue is the alternative one, the reference genome carries the
+    variant allele: the variant is scored on the Ensembl protein with the reference residue
+    restored, registered under ``<transcript>#<ref><position>`` in the returned sequences.
+    Entries without an accession are located by their position on the Ensembl protein.
+
+    Returns the variants (unique per gene, position and alternative residue), the restored
+    sequences and the counts of each outcome.
+    """
+    from dog_realistic import alignment_map, make_aligner  # Biopython (benchmarks group)
+
+    aligner = make_aligner()
+    counts: dict[str, int] = defaultdict(int)
+    mapped: dict[tuple[str, int, str], ProteinVariant] = {}
+    restored: dict[str, str] = {}
+    for record in records:
+        changes = parse_protein_changes(record["protein"])
+        if len(changes) != 1:
+            counts["no_single_protein_change"] += 1
+            continue
+        ref, position, alt = changes[0]
+        candidates = [
+            tx for tx in genes.get(record["gene"].upper(), [])
+            if tx.transcript_id in proteins
+            and proteins[tx.transcript_id].status is ProteinStatus.OK
+        ]  # fmt: skip
+        if not candidates:
+            counts["gene_not_in_annotation"] += 1
+            continue
+        accession = protein_accession(record["protein"])
+        source = refseq.get(accession) if accession else None
+        if accession and source is None:
+            counts["refseq_protein_not_found"] += 1
+            continue
+        if source is not None and (
+            position > len(source) or source[position - 1] not in (ref, alt)
+        ):
+            counts["refseq_residue_mismatch"] += 1
+            continue
+        found = None
+        for tx in candidates:
+            sequence = proteins[tx.transcript_id].sequence
+            if source is None:
+                index = position - 1 if position <= len(sequence) else -1
+            else:
+                index = int(alignment_map(source, sequence, aligner)[position - 1])
+            if index < 0:
+                continue
+            if sequence[index] == ref:
+                found = (tx, tx.transcript_id, index + 1)
+                break
+            if sequence[index] == alt and source is not None:
+                key = f"{tx.transcript_id}#{ref}{index + 1}"
+                restored[key] = sequence[:index] + ref + sequence[index + 1 :]
+                found = (tx, key, index + 1)
+                counts["reference_genome_carries_alt"] += 1
+                break
+        if found is None:
+            counts["ensembl_residue_mismatch"] += 1
+            continue
+        tx, transcript_key, ensembl_position = found
+        counts["mapped"] += 1
+        mapped.setdefault(
+            (tx.gene_name.upper(), ensembl_position, alt),
+            ProteinVariant(
+                tx.gene_name, transcript_key, ensembl_position, ref, alt, 1, record["category"]
+            ),
+        )
+    counts["mapped_unique"] = len(mapped)
+    variants = list(mapped.values())
+    used = {v.transcript_id for v in variants}
+    return variants, {k: s for k, s in restored.items() if k in used}, dict(counts)
 
 
 # ---------------------------------------------------------------------------- population
@@ -288,7 +439,9 @@ def main() -> int:
         transcripts,
         set(canonical_ids) | {tx.transcript_id for g in omia_genes for tx in genes.get(g, [])},
     )
-    positives, mapping_counts = map_omia(omia, [(genes, proteins)])
+    accessions = {a for r in omia if (a := protein_accession(r["protein"]))}
+    refseq = fetch_refseq_proteins(accessions, data / "refseq_proteins.fa")
+    positives, restored, mapping_counts = map_omia_via_refseq(omia, genes, proteins, refseq)
     log.info("OMIA chicken missense records: %d; mapping: %s", len(omia), mapping_counts)
     unmapped_genes = sorted(g for g in omia_genes if g not in genes)
     if unmapped_genes:
@@ -331,7 +484,8 @@ def main() -> int:
         scorer_factory=scorer_factory,
         model_name=args.model,
     )
-    positive_keys = {(p.transcript_id, p.position, p.alt) for p in positives}
+    # a common variant at the site of a causal one (either direction) is not a negative
+    positive_sites = {(p.transcript_id.split("#")[0], p.position) for p in positives}
     negatives: dict[tuple[str, int, str], ProteinVariant] = {}
     overlap = 0
     for v in result.variants:
@@ -339,17 +493,20 @@ def main() -> int:
         if v.status is not VariantStatus.OK or c.transcript_id not in canonical:
             continue
         key = (c.transcript_id, c.protein_pos, c.alt_aa)
-        if key in positive_keys:
-            overlap += 1  # common in chickens and listed as causal: not a negative
+        if key[:2] in positive_sites:
+            overlap += 1
             continue
         gene = canonical[c.transcript_id]
         group = "same_gene" if gene in positive_genes else "random_gene"
         negatives[key] = ProteinVariant(gene, key[0], key[1], c.ref_aa, key[2], 0, group)
-    log.info("Negatives: %d (removed %d also listed as causal)", len(negatives), overlap)
+    log.info("Negatives: %d (removed %d at causal sites)", len(negatives), overlap)
 
     # ---- scores on chicken proteins
     variants = positives + list(negatives.values())
-    sequences = {v.transcript_id: proteins[v.transcript_id].sequence for v in variants}
+    sequences = {
+        v.transcript_id: restored.get(v.transcript_id) or proteins[v.transcript_id].sequence
+        for v in variants
+    }
     lazy = LazyScorer(scorer_factory)
     wt = cached_wt_scores({sequence_hash(s): s for s in sequences.values()}, cache, lazy)
     masked = cached_masked_scores(
@@ -422,6 +579,7 @@ def main() -> int:
         "pathogenic": groups == "pathogenic",
         "disease": np.isin(groups, ["pathogenic", "disease_unclassified"]),
         "trait": groups == "trait",
+        "all": labels == 1,
     }
     all_scored = np.all([np.isfinite(table[m]) for m in methods], axis=0)
     subsets = {"all variants": np.ones(n, bool)}
@@ -436,7 +594,7 @@ def main() -> int:
             "same genes": common & np.isin(gene_names, list(set(gene_names[causal]))),
             "random genes": common & (groups == "random_gene"),
         }
-        if set_name != "trait":
+        if set_name not in ("trait", "all"):
             negative_groups["OMIA traits"] = causal_sets["trait"]
         for negatives_name, negative in negative_groups.items():
             for subset_name, subset in subsets.items():
@@ -460,7 +618,7 @@ def main() -> int:
         "random_genes": len(random_genes),
         "common_missense_same_genes": int((common & (groups == "same_gene")).sum()),
         "common_missense_random_genes": int((common & (groups == "random_gene")).sum()),
-        "common_removed_as_causal": overlap,
+        "common_removed_at_causal_sites": overlap,
     }
     for name, selection in (*causal_sets.items(), ("common", common)):
         if not selection.any():
@@ -508,6 +666,27 @@ def main() -> int:
     print()
     for k, v in summary.items():
         print(f"{k}: {v}")
+
+    # per causal variant: printed only (OMIA data are not written to the repository)
+    common_wt = -table["chicken_wt"][common]
+    print("\n| gene | change (Ensembl numbering) | set | wt LLR | share of common variants "
+          "scoring higher | in-protein pct | proteome pct | human |")  # fmt: skip
+    print("|---|---|---|---|---|---|---|---|")
+    for i, v in enumerate(variants):
+        if v.label != 1:
+            continue
+        restored_note = " (reference carries ALT)" if "#" in v.transcript_id else ""
+        above = float((common_wt > wt_llr[i]).mean()) if common.any() else float("nan")
+        human_note = (
+            ("mapped" if np.isfinite(table["human_masked"][i]) else "not mapped")
+            if human_files
+            else "-"
+        )
+        pct = f"{proteome_pct[i]:.1f}" if proteome_pct is not None else "-"
+        print(
+            f"| {v.gene} | {v.ref}{v.position}{v.alt}{restored_note} | {v.group} "
+            f"| {wt_llr[i]:.2f} | {above:.0%} | {in_protein[i]:.2f} | {pct} | {human_note} |"
+        )
     return 0
 
 

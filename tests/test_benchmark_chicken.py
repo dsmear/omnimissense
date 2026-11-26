@@ -3,6 +3,7 @@ from pathlib import Path
 
 import numpy as np
 import pysam
+import pytest
 from synthetic import CHROM
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "benchmarks"))
@@ -10,13 +11,17 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "benchmarks"))
 from chicken_omia import (
     auroc_row,
     extract_common_snvs,
+    fetch_refseq_proteins,
     in_protein_percentile,
+    map_omia_via_refseq,
     population_source,
+    protein_accession,
     write_cds_bed,
 )
 from dog_omia import read_omia
 
 from omnimissense.gff import CdsSegment, Transcript
+from omnimissense.proteome import Protein, ProteinStatus
 from omnimissense.sequences import AA_INDEX
 
 
@@ -114,3 +119,79 @@ def test_read_omia_takes_the_species_and_its_traits(tmp_path) -> None:
         ("1", "trait"),
         ("2", "disease_unclassified"),
     ]
+
+
+def test_protein_accession() -> None:
+    assert protein_accession("NP_989476.1:p.(E89K)") == "NP_989476.1"
+    assert protein_accession("XP_015155859.1:p.(V206_S210del)") == "XP_015155859.1"
+    assert protein_accession("p.(H215P)") is None
+    assert protein_accession("") is None
+
+
+def test_fetch_refseq_proteins_reads_the_cache_without_network(tmp_path) -> None:
+    cache = tmp_path / "refseq.fa"
+    cache.write_text(">NP_1.1 some protein [Gallus gallus]\nMKT\nAY*\n>NP_2.1 other\nMA\n")
+    assert fetch_refseq_proteins({"NP_1.1"}, cache) == {"NP_1.1": "MKTAY"}
+
+
+def _gene(transcripts: dict[str, str]) -> tuple[dict, dict]:
+    txs = [
+        Transcript(
+            transcript_id=tid,
+            gene_id="G1",
+            seqid=CHROM,
+            strand="+",
+            biotype="protein_coding",
+            canonical=(i == 0),
+            gene_name="gene1",
+            cds=[CdsSegment(1, 3 * len(seq) + 3, 0)],
+        )
+        for i, (tid, seq) in enumerate(transcripts.items())
+    ]
+    proteins = {tid: Protein(tid, seq, ProteinStatus.OK) for tid, seq in transcripts.items()}
+    return {"GENE1": txs}, proteins
+
+
+def _record(protein: str, category: str = "trait") -> dict[str, str]:
+    return {"id": "1", "gene": "GENE1", "protein": protein, "category": category}
+
+
+def test_map_omia_via_refseq_carries_positions_through_the_alignment() -> None:
+    pytest.importorskip("Bio", reason="benchmark dependencies: uv sync --all-groups")
+    # Ensembl's protein has 3 extra N-terminal residues: RefSeq Y5 is Ensembl Y8
+    genes, proteins = _gene({"T1": "MGGMKTAYIAKQRQISFVK"})
+    refseq = {"NP_1.1": "MKTAYIAKQRQISFVK"}
+    variants, restored, counts = map_omia_via_refseq(
+        [_record("NP_1.1:p.(Y5D)"), _record("NP_1.1:p.(Y5D)"), _record("NP_1.1:p.(W5D)")],
+        genes, proteins, refseq,
+    )  # fmt: skip
+    assert [(v.transcript_id, v.position, v.ref, v.alt) for v in variants] == [("T1", 8, "Y", "D")]
+    assert restored == {}
+    assert counts["mapped"] == 2 and counts["mapped_unique"] == 1
+    assert counts["refseq_residue_mismatch"] == 1  # RefSeq has neither W nor D at 5
+
+
+def test_map_omia_via_refseq_restores_the_reference_residue() -> None:
+    pytest.importorskip("Bio", reason="benchmark dependencies: uv sync --all-groups")
+    # the genome (and the RefSeq protein) carry the variant allele K at RefSeq position 5
+    genes, proteins = _gene({"T1": "MGGMKTAKIAKQRQISFVK"})
+    refseq = {"NP_1.1": "MKTAKIAKQRQISFVK"}
+    variants, restored, counts = map_omia_via_refseq(
+        [_record("NP_1.1:p.(E5K)")], genes, proteins, refseq
+    )
+    assert [(v.transcript_id, v.position, v.ref, v.alt) for v in variants] == [
+        ("T1#E8", 8, "E", "K")
+    ]
+    assert restored == {"T1#E8": "MGGMKTAEIAKQRQISFVK"}
+    assert counts["reference_genome_carries_alt"] == 1
+
+
+def test_map_omia_via_refseq_without_accession_uses_ensembl_numbering() -> None:
+    pytest.importorskip("Bio", reason="benchmark dependencies: uv sync --all-groups")
+    genes, proteins = _gene({"T1": "MKTAYIAK"})
+    variants, _, counts = map_omia_via_refseq(
+        [_record("p.(Y5D)"), _record("p.(K5D)"), _record("NP_9.1:p.(Y5D)")], genes, proteins, {}
+    )
+    assert [(v.position, v.ref, v.alt) for v in variants] == [(5, "Y", "D")]
+    assert counts["ensembl_residue_mismatch"] == 1
+    assert counts["refseq_protein_not_found"] == 1
