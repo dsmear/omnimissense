@@ -380,3 +380,14 @@ protein → writes them to the VCF `INFO` field.
 | Fix: an in-memory index `seq_hash → {(file, row group)}`, built from the `seq_hash` column only (0.03 s on yeast) and extended with new files; lookups read only the row groups that hold the requested hashes. Plus batching: the reference and `export-variants` read scores per batch of sequences (≤ 2 M residues) instead of per sequence. | Yeast cache (32 files): one protein 224 → 16 ms, 2,000 proteins 3.69 → 0.63 s, identical values; reference build 31 → 9 s. **Dog (user's machine): reference 9 min 20 s → 50 s** (same 73,901,519 values; `precompute` with nothing to score 73 s). |
 | Dog, other timings with the 0.3.0+ code (user's machine): `proteome` 21.6 s (0.2.0: ~10 s; csq now parses the GFF3 too, plus the extra scan) | |
 | Dog re-timed with the current code (user's machine, RTX 3070): `annotate` on the chr38 demo (127,270 records) 13.5 s with cached proteins (0.2.0: 12 s), 1,689 missense consequences all `ok` as before, percentiles present (e.g. LLR −0.73 → 99.8th percentile: common Ensembl variants are mostly benign); `proteome` 22 s. README performance table updated. | |
+
+---
+
+## 2026-11-26 — Release 0.4.0 (prepared; not tagged)
+
+| Decision | Rationale |
+|---|---|
+| 0.4.0: minor version | New features (percentiles, selenocysteine, GTF, MNV scoring) and fixes; additive output changes only (a new `INFO` tag and new last TSV columns), as the Compatibility section requires; cache format unchanged (no `v1` bump: the index is built in memory). |
+| Changelog tells upgraders to run `precompute` once | Percentiles need the reference; with scores already cached it takes about a minute for the dog. |
+| Release checks | `uv lock` changes only the version. `uv build`: 19 modules including `reference.py` and `snvs.py`; `twine check` passes for wheel and sdist; the wheel installed in a separate environment reports 0.4.0, `doctor` sees bcftools 1.24 (pysam 0.24.1), `proteome` gives *E. coli* 4,300 ok + 18 pseudogene (selenoproteins included) and yeast from the NCBI GTF 6,021 ok + 6 pseudogene, the benchmark numbers; this also exercises the csq-in-a-subprocess path from an installed package. 204 tests pass. |
+| Not tagged | Pushing `v0.4.0` publishes to PyPI: the user tags after the pull request is merged. |

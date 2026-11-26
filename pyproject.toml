@@ -1,6 +1,6 @@
 [project]
 name = "omnimissense"
-version = "0.3.0"
+version = "0.4.0"
 description = "Score missense variants in any species with protein language models, straight from a VCF."
 readme = "README.md"
 license = "MIT"
