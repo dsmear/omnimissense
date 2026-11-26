@@ -203,6 +203,10 @@ they are missing, they are skipped with a warning.
   causal variants, the script also prints one line per causal variant (not written to the
   repository).
 
+Results (VESM 650M): `results/chicken_omia_vesm_650m.tsv` (AUROC rows) and
+`results/chicken_omia_vesm_650m.summary.tsv` (counts, mapping, percentiles); summary in the
+main README, *Validation*.
+
 **Data sources and terms**
 
 - OMIA: as in section 2.

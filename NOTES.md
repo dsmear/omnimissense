@@ -427,3 +427,16 @@ protein → writes them to the VCF `INFO` field.
 | Tables: `to_arrow()` always, `to_pandas()` with the optional extra `omnimissense[pandas]` (imported on call, clear error otherwise) | pyarrow is already a dependency (the cache); pandas is not installed today, even indirectly, and could clash with a user's pinned version. |
 | `import omnimissense` imports the API on first attribute access (PEP 562) | The CLI keeps starting without torch (checked by a test). |
 | `pipeline.annotate` takes `output_vcf` / `output_tsv` as optional | The API returns objects; files are written only when asked. The annotated VCF needs csq's temporary output, so it is written during the call (`output_vcf=`), not afterwards. |
+
+## 2026-11-26 — Chicken benchmark: results (VESM 650M, user's machine)
+
+| Finding | Numbers |
+|---|---|
+| Chicken proteome `precompute` (RTX 3070, VESM 650M fp16) | 44,876 coding transcripts, 42,089 unique proteins, 27.6 M residues in 49 min (9,384 residues/s); percentile reference 65,423,227 values (16,986 canonical transcripts) |
+| Benchmark run | 21 causal variants mapped (4 with the ancestral residue restored); common: 54 in the 14 causal genes + 1,763 in 499 random genes; 5 common variants at causal sites removed |
+| Main AUROC, all causal vs all common | VESM chicken wild-type 0.922 (0.868–0.966); VESM human ortholog 0.830; AlphaMissense 0.821 (0.715–0.919); VESM masked 0.793; BLOSUM62 0.564. Paired: chicken − AlphaMissense +0.101 (+0.005 to +0.204); chicken − human protein +0.092 (−0.006 to +0.198) |
+| Scored by every method (16 / 416) | VESM chicken 0.888, human 0.870, AlphaMissense 0.815; differences not significant |
+| By set | Traits (17): chicken 0.916 vs AlphaMissense 0.781 (+0.127 on the 12 both score, +0.045 to +0.227). Diseases (4): chicken 0.949 vs AlphaMissense 0.995 (−0.046, −0.086 to −0.006): too few to generalise |
+| Human mappability | causal 76% (EDNRB2 ×3 has no mammalian ortholog; chicken CDKN2A = ARF only, UniProt's human CDKN2A is p16), common 23% (dog: 96% / 41%) |
+| Percentiles | proteome-wide median: causal 35.6, common 82.0; below 5th: causal 9.5%, common 0%. In-protein median: causal 0.40, common 0.89 |
+| Masked marginal | worse than wild-type (0.79 vs 0.92, pathogenic 3: 0.51 with a 0.02–1.00 interval); not investigated per variant (the masked mode is not the default); dog showed the same direction (0.948 vs 0.977) |

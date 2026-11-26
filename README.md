@@ -17,8 +17,8 @@ Python code: [Python API](#python-api).
 
 > **Status: alpha.** The pipeline works end to end on Ensembl and NCBI annotations (dog, yeast,
 > *E. coli*: proteomes identical to the reference translations), reproduces published ESM-2
-> results and separates known dog disease variants from common dog variants (see
-> [Validation](#validation)).
+> results and separates known causal variants from common variants in dog and in chicken, a
+> species more than 300 million years from human (see [Validation](#validation)).
 > The scores measure how disruptive a substitution looks to the protein, **not** whether it
 > causes disease: do not use them alone for breeding or clinical decisions.
 
@@ -412,6 +412,49 @@ What this says:
   of the causal variants, which sit on conserved residues. Unscorable variants are mostly
   benign, so for ranking they cost the workaround little in the dog, a species close to
   human. omnimissense scores 100% of them, which should matter more in species far from human.
+
+**Chicken: far from human** (`benchmarks/chicken_omia.py`). Chicken and human last shared an
+ancestor more than 300 million years ago (dog: about 90). OMIA chicken missense variants,
+located on the RefSeq protein OMIA cites and carried to the Ensembl 116 GRCg7b protein by
+alignment (21 distinct variants: 4 diseases, 17 traits such as plumage colour, virus
+resistance and a blood group), against EVA missense variants with allele frequency ≥ 5% among
+96 Bangladeshi native chickens. VESM 650M; AUROC with 95% bootstrap interval.
+
+| causal set | common variants | n causal / common | **VESM, chicken protein** | VESM, human ortholog | AlphaMissense (human) | VESM masked | BLOSUM62 |
+|---|---|---|---|---|---|---|---|
+| all causal | all | 21 / 1,817 | **0.922** (0.868–0.966) | 0.830 (0.720–0.926) | 0.821 (0.715–0.919) | 0.793 | 0.564 |
+| all causal, scored by every method | all | 16 / 416 | **0.888** (0.802–0.953) | 0.870 (0.771–0.944) | 0.815 (0.676–0.923) | 0.743 | 0.535 |
+| all causal | same genes | 21 / 54 | **0.886** (0.804–0.950) | 0.822 | 0.821 | 0.772 | 0.520 |
+| traits | all | 17 / 1,817 | **0.916** (0.858–0.967) | 0.798 | 0.781 (0.649–0.898) | 0.831 | 0.610 |
+| diseases | all | 4 / 1,817 | 0.949 (0.910–0.987) | 0.969 | **0.995** (0.987–0.999) | 0.634 | 0.367 |
+
+What this says:
+
+- **The score holds far from human.** VESM on the chicken protein separates the causal
+  variants from common chicken variants with AUROC 0.92 (dog: 0.977 pathogenic, 0.946 traits),
+  0.89 within the same genes; amino-acid similarity alone is near chance (0.56).
+- **The human workaround loses coverage.** It cannot score 5 of the 21 causal variants
+  (EDNRB2, 3 variants: the gene does not exist in mammals; chicken CDKN2A encodes only ARF)
+  nor 77% of the common ones (the human residue differs at variable sites). On all
+  variants VESM on the chicken protein beats AlphaMissense: +0.10 (paired interval +0.005 to
+  +0.20). On the 16 variants every method scores the differences are not significant (VESM
+  chicken − AlphaMissense +0.07, −0.005 to +0.16; chicken − human protein +0.02, −0.001 to
+  +0.04).
+- **By set:** on the traits VESM on the chicken protein is ahead of AlphaMissense also on the
+  variants both score (+0.13, +0.05 to +0.23); on the 4 disease variants AlphaMissense is
+  ahead (0.995 vs 0.949), too few to generalise, in genes conserved enough for the human
+  mapping to work.
+- **Percentiles** (`OMS_WT_PCT`, after `precompute` on the chicken genome): causal variants
+  have a median proteome-wide percentile of 36, common variants 82; 10% of the causal
+  variants and none of the common ones are below the 5th percentile. A damaging variant does
+  not need an extreme percentile.
+- The masked marginal is clearly worse than the wild-type marginal here (0.79 vs 0.92; dog
+  0.948 vs 0.977): the default stays the wild-type marginal.
+- **Caveats:** 21 variants, mostly traits, some of them gain of function (MC1R extended
+  black); bootstrap intervals from so few causal variants are optimistic; OMIA ascertainment
+  bias as in the dog; Z-linked causal genes (5 of 14) have no same-gene negatives (the
+  population VCF is autosomal); in 4 variants the broiler reference genome carries the
+  variant allele and the ancestral residue was restored before scoring.
 
 ## Limitations
 
