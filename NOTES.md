@@ -440,3 +440,15 @@ protein → writes them to the VCF `INFO` field.
 | Human mappability | causal 76% (EDNRB2 ×3 has no mammalian ortholog; chicken CDKN2A = ARF only, UniProt's human CDKN2A is p16), common 23% (dog: 96% / 41%) |
 | Percentiles | proteome-wide median: causal 35.6, common 82.0; below 5th: causal 9.5%, common 0%. In-protein median: causal 0.40, common 0.89 |
 | Masked marginal | worse than wild-type (0.79 vs 0.92, pathogenic 3: 0.51 with a 0.02–1.00 interval); not investigated per variant (the masked mode is not the default); dog showed the same direction (0.948 vs 0.977) |
+
+---
+
+## 2026-11-26 — Release 0.5.0 (prepared; not tagged)
+
+| Decision | Rationale |
+|---|---|
+| `--annotation` replaces `--gff3` (GFF3 or GTF), `--gff3` kept as an alias; `export-proteins` replaces `export`, kept as a hidden alias | Names reviewed before the 1.0 freeze: `--gff3` was misleading since GTF support (0.4.0) and `export` was easy to confuse with `export-variants`. Old names keep working, as the Compatibility rules require. The Python API (new, unreleased until now) uses `annotation=` from the start. Other options unchanged: the opposite defaults of `export-proteins` (all transcripts) and `export-variants` (canonical only) follow the output sizes. |
+| Masked-marginal anomaly in the chicken benchmark not investigated before the release | `masked_marginals` re-read: window weights sum to 1, LLR against the wild-type residue; nothing wrong found. VESM is trained on unmasked LLR targets and its authors score with the wild-type marginal; the default is unchanged. To check per variant before 1.0. |
+| Percentile threshold tables in the benchmarks (`*.percentiles.tsv`): share of causal and common variants below the 1st, 5th, 10th, 20th, 30th and 50th proteome-wide percentile | A guide to reading `OMS_WT_PCT`; the dog needs `precompute` on the GSD assembly (the Dog10K one), the chicken uses the reference already built. |
+| Release checks | `uv lock` changes only the version; `uv build`: 20 modules including `api.py`; `twine check` passes for wheel and sdist; metadata has the `pandas` extra. In a fresh environment (`omnimissense[pandas]`, Python 3.13): `--version` 0.5.0, `doctor` sees bcftools 1.24; `proteome` with the old `--gff3` on *E. coli* gives 4,300 ok + 18 pseudogene, with `--annotation` on the yeast GTF 6,021 ok + 6 pseudogene; `export` is hidden from the help; the Python API (tiny model) scores a protein, runs `precompute` and `annotate` with percentiles and `to_pandas()`. 235 tests pass. |
+| Not tagged | Pushing `v0.5.0` publishes to PyPI: the user tags after the pull request is merged. |

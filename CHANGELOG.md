@@ -1,22 +1,32 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — 2026-11-26
+
+A public Python API, clearer command names, and evidence far from human (chicken).
 
 **New**
 
-- **Python API** (`import omnimissense as om`), stable from this release on (README,
-  *Python API* and *Compatibility*): `om.Model` (lazy loading, shared score cache),
-  `model.score_protein()` / `score_proteins()` returning `ProteinScores` (every
-  substitution; `scores["Y5D"]`), `om.annotate()` returning `AnnotatedVariants` of
-  documented `AnnotatedVariant` objects (the TSV columns plus `protein_change`), with
-  `to_arrow()`, `to_pandas()` and `write_tsv()`, and `om.precompute()`. Optional extra
-  `omnimissense[pandas]` for `to_pandas()`.
-- Chicken benchmark (`benchmarks/chicken_omia.py`): OMIA causal variants vs common variants
-  of 96 Bangladeshi chickens (EVA), with the human-ortholog comparison.
+- **Python API** (`import omnimissense as om`), covered by the compatibility rules from this
+  release on (README, *Python API* and *Compatibility*): `om.Model` (weights loaded on first
+  use, score cache shared with the command line), `model.score_protein()` /
+  `score_proteins()` returning `ProteinScores` (every substitution; `scores["Y5D"]` checks
+  the reference residue), `om.annotate()` returning `AnnotatedVariants` of documented
+  `AnnotatedVariant` objects (the TSV columns plus `protein_change`), with `to_arrow()`,
+  `to_pandas()` and `write_tsv()`, and `om.precompute()`. Optional extra
+  `omnimissense[pandas]` for `to_pandas()`; `import omnimissense` still loads no torch.
+- **Chicken benchmark** (`benchmarks/chicken_omia.py`): 21 OMIA causal missense variants vs
+  1,817 common variants of 96 Bangladeshi chickens (EVA): AUROC 0.922 with VESM on the
+  chicken protein; the human-ortholog workaround cannot score 24% of the causal variants.
+  OMIA's RefSeq numbering is carried to the Ensembl protein by alignment.
+- Benchmarks report the share of causal and common variants below each proteome-wide
+  percentile (`*.percentiles.tsv`).
 
 **Changes in behaviour**
 
-- None for the command line. `import omnimissense` still loads no torch.
+- `--annotation` is the new name of `--gff3` (it also takes GTF); `--gff3` keeps working.
+- `export-proteins` is the new name of `export` (to tell it apart from `export-variants`);
+  `export` keeps working, hidden from the help.
+- No change to outputs, scores or the cache.
 
 ## 0.4.0 — 2026-11-26
 
