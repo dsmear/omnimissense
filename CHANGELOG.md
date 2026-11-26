@@ -22,6 +22,8 @@
   a transcript feature get one (`tx-<CDS ID>`, plus `gene-<CDS ID>` when the CDS has no
   parent) in a normalized copy of the GFF3, which bcftools csq and the translation read; an
   embedded `##FASTA` section (Prokka, Bakta), which made csq fail, is dropped.
+- New status `pseudogene`: CDS flagged `pseudo=true` (NCBI) are neither translated nor scored
+  (previously, interrupted pseudogenes that happened to translate were scored as proteins).
 
 ## 0.2.0 — 2026-11-25
 

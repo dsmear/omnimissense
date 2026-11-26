@@ -72,6 +72,8 @@ class Transcript:
     mitochondrial: bool = False
     #: NCBI genetic code; None = mitochondrial DNA of unknown code (not translated).
     genetic_code: int | None = STANDARD
+    #: The CDS is flagged ``pseudo=true`` (NCBI): a disrupted gene, not a protein.
+    pseudo: bool = False
     cds: list[CdsSegment] = field(default_factory=list)
 
     def cds_in_transcript_order(self) -> list[CdsSegment]:
@@ -362,15 +364,19 @@ def _write_normalized(
 
 
 def _add_source_attributes(path: Path, transcripts: dict[str, Transcript]) -> dict[str, bool]:
-    """Set biotype, gene name and canonical tag from the original GFF3.
+    """Set biotype, gene name, canonical tag and pseudo flag from the original GFF3.
 
     Returns ``{gene_id: True}`` for genes with a canonical-tagged transcript (coding or not).
     """
     gene_ids = {tx.gene_id for tx in transcripts.values()}
     gene_names: dict[str, str] = {}
     tagged_genes: dict[str, bool] = {}
-    for _seqid, _source, _feature, *_rest, attr_text in _features(path):
+    for _seqid, _source, feature, *_rest, attr_text in _features(path):
         attributes = parse_attributes(attr_text)
+        if feature == "CDS" and attributes.get("pseudo") == "true":
+            for parent in attributes.get("Parent", "").split(","):
+                if csq_id(parent) in transcripts:
+                    transcripts[csq_id(parent)].pseudo = True
         feature_id = attributes.get("ID")
         if not feature_id:
             continue

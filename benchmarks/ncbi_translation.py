@@ -35,17 +35,29 @@ from omnimissense.proteome import ProteinStatus, build_proteome
 log = logging.getLogger("ncbi_translation")
 
 _PROTEIN_ID = re.compile(r"\[protein_id=([^\]]+)\]")
+_LOCUS_TAG = re.compile(r"\[locus_tag=([^\]]+)\]")
+
+
+def _cds_key(protein_id: str | None, locus_tag: str | None) -> str | None:
+    """Match key: the protein ID; pseudo CDS have none, so their locus tag instead."""
+    if protein_id:
+        return protein_id
+    return f"locus_tag:{locus_tag}" if locus_tag else None
 
 
 def read_translated_cds(path: Path) -> dict[str, str]:
-    """``{protein_id: sequence}`` from an NCBI ``translated_cds`` FASTA (stop removed)."""
+    """``{protein_id or locus_tag key: sequence}`` from an NCBI ``translated_cds`` FASTA
+    (stop removed)."""
     proteins: dict[str, list[str]] = {}
     current = None
     with open_text(path) as handle:
         for line in handle:
             if line.startswith(">"):
-                match = _PROTEIN_ID.search(line)
-                current = match.group(1) if match else None
+                protein_id, locus_tag = _PROTEIN_ID.search(line), _LOCUS_TAG.search(line)
+                current = _cds_key(
+                    protein_id.group(1) if protein_id else None,
+                    locus_tag.group(1) if locus_tag else None,
+                )
                 if current is not None:
                     proteins[current] = []
             elif current is not None:
@@ -54,7 +66,8 @@ def read_translated_cds(path: Path) -> dict[str, str]:
 
 
 def cds_protein_ids(gff3: Path) -> dict[str, str]:
-    """``{transcript ID as csq reports it: protein_id}`` from the CDS features of a GFF3."""
+    """``{transcript ID as csq reports it: protein_id or locus_tag key}`` from the CDS
+    features of a GFF3."""
     mapping = {}
     with open_text(gff3) as handle:
         for line in handle:
@@ -66,10 +79,10 @@ def cds_protein_ids(gff3: Path) -> dict[str, str]:
             if len(columns) != 9 or columns[2] != "CDS":
                 continue
             attributes = parse_attributes(columns[8])
-            protein_id = attributes.get("protein_id")
-            if protein_id:
+            key = _cds_key(attributes.get("protein_id"), attributes.get("locus_tag"))
+            if key:
                 for parent in attributes.get("Parent", "").split(","):
-                    mapping[csq_id(parent)] = protein_id
+                    mapping[csq_id(parent)] = key
     return mapping
 
 

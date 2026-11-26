@@ -59,6 +59,11 @@ def _consequence(ref_aa="K", alt_aa="R", pos=2) -> Consequence:
             VariantStatus.PROTEIN_UNAVAILABLE,
         ),
         (_consequence(), None, VariantStatus.PROTEIN_UNAVAILABLE),
+        (
+            _consequence(),
+            Protein("T", "", ProteinStatus.PSEUDOGENE),
+            VariantStatus.PSEUDOGENE,
+        ),
     ],
 )
 def test_classify(consequence, protein, status) -> None:

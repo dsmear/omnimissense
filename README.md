@@ -134,7 +134,8 @@ ref_aa alt_aa protein_length n_windows wt_marginal masked_marginal status`
 
 **Status values:** `ok`, `ref_aa_mismatch` (csq and the translated protein disagree),
 `multi_aa_change` (several residues change), `nonstandard_aa`, `protein_unavailable`
-(e.g. internal stop codon), `mitochondrial_skipped` (see limitations). Only `ok` rows are scored.
+(e.g. internal stop codon), `mitochondrial_skipped` (see limitations), `pseudogene` (CDS
+flagged `pseudo=true` by NCBI: a disrupted gene). Only `ok` rows are scored.
 
 ## Performance (RTX 3070, 8 GB)
 
@@ -167,6 +168,10 @@ do).
   translation of the same CDS, including the 19 mitochondrial ones (yeast mitochondrial code,
   taken from the GFF3). The other 6 are ORFs that NCBI itself marks as pseudogenes (internal
   stop codons).
+- **Prokaryote** (same script): *E. coli* K-12 MG1655 (GCF_000005845.2), whose CDS hang
+  directly from genes; 4,297 / 4,297 proteins identical to NCBI's translation (table 11 from
+  the GFF3), including the programmed frameshifts of *prfB*, *dnaX* and *copA*. Not scored:
+  18 NCBI pseudogenes and 3 selenoproteins.
 - **Genetic codes:** the 26 tables are bcftools csq's own (copied from its source), checked
   against Biopython's NCBI tables and, for every table, against the amino acids csq reports
   for every codon (`tests/test_genetic_code*.py`).
@@ -270,7 +275,7 @@ What this says:
 - RNA editing (plant mitochondria and plastids) is not modelled: the protein is translated
   from the genome sequence.
 - Selenoproteins (a TGA codon read as selenocysteine) look like proteins with an internal
-  stop and are skipped (1 transcript in the dog).
+  stop and are skipped (1 transcript in the dog, 3 in *E. coli*).
 - Consequences are computed one record at a time: two nearby variants on the same haplotype
   that change the same codon are scored separately.
 - Variants changing several residues at once (MNVs) are reported but not scored.

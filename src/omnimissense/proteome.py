@@ -20,6 +20,8 @@ class ProteinStatus(StrEnum):
     INTERNAL_STOP = "internal_stop"
     #: Mitochondrial transcript without a known genetic code (``--mito-genetic-code``).
     MITOCHONDRIAL = "mitochondrial"
+    #: CDS flagged ``pseudo=true`` (NCBI): a disrupted gene, not translated or scored.
+    PSEUDOGENE = "pseudogene"
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,8 @@ def translate_transcript(fasta: pysam.FastaFile, transcript: Transcript) -> Prot
         return Protein(transcript.transcript_id, "", ProteinStatus.NO_CDS)
     if transcript.genetic_code is None:
         return Protein(transcript.transcript_id, "", ProteinStatus.MITOCHONDRIAL)
+    if transcript.pseudo:
+        return Protein(transcript.transcript_id, "", ProteinStatus.PSEUDOGENE)
     code = GENETIC_CODES[transcript.genetic_code]
     cds = coding_sequence(fasta, transcript)
     protein = translate(cds, code.id)

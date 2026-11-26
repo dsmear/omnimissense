@@ -64,6 +64,7 @@ class VariantStatus(StrEnum):
     NONSTANDARD_AA = "nonstandard_aa"
     PROTEIN_UNAVAILABLE = "protein_unavailable"
     MITOCHONDRIAL = "mitochondrial_skipped"
+    PSEUDOGENE = "pseudogene"
 
 
 @dataclass
@@ -106,6 +107,8 @@ def classify(consequence: Consequence, protein: Protein | None) -> VariantStatus
         return VariantStatus.PROTEIN_UNAVAILABLE
     if protein.status is ProteinStatus.MITOCHONDRIAL:
         return VariantStatus.MITOCHONDRIAL
+    if protein.status is ProteinStatus.PSEUDOGENE:
+        return VariantStatus.PSEUDOGENE
     if protein.status is not ProteinStatus.OK:
         return VariantStatus.PROTEIN_UNAVAILABLE
     if len(consequence.ref_aa) != 1 or len(consequence.alt_aa) != 1:

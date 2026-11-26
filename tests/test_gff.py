@@ -174,6 +174,22 @@ def test_cds_without_a_transcript_get_one(synthetic, tmp_path, style, expected) 
     assert sorted(p.sequence for p in proteins.values()) == sorted([PROTEIN_A, PROTEIN_B])
 
 
+def test_pseudo_cds_are_flagged_and_not_translated(synthetic, tmp_path) -> None:
+    # NCBI marks disrupted genes with pseudo=true on the CDS (E. coli: 18, yeast: 6).
+    lines = [
+        line + ";pseudo=true" if "\tCDS\t" in line and "Parent=gene-B" in line else line
+        for line in prokaryote_gff3_lines("ncbi")
+    ]
+    transcripts = read_transcripts(_write(tmp_path / "pseudo.gff3", lines), synthetic.fasta)
+    assert {t: tx.pseudo for t, tx in transcripts.items()} == {
+        "tx-WP_A.1": False,
+        "tx-WP_B.1": True,
+    }
+    proteins = build_proteome(synthetic.fasta, transcripts)
+    assert proteins["tx-WP_A.1"].status is ProteinStatus.OK
+    assert proteins["tx-WP_B.1"].status is ProteinStatus.PSEUDOGENE
+
+
 def test_prokaryotic_genetic_code_comes_from_the_gff3(synthetic, tmp_path) -> None:
     gff = _write(tmp_path / "ncbi.gff3", prokaryote_gff3_lines("ncbi"))
     annotation = prepare_annotation(gff, tmp_path)
