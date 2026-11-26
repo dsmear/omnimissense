@@ -1,7 +1,7 @@
 name: Release
 
 # Publishing a release: bump `version` in pyproject.toml, commit, then push a matching tag:
-#   git tag v0.2.0 && git push origin v0.2.0
+#   git tag v0.3.0 && git push origin v0.3.0
 # PyPI trusted publishing (no API token): the PyPI project must list this repository,
 # workflow `release.yml` and environment `pypi` as a trusted publisher.
 

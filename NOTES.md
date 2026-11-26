@@ -298,3 +298,14 @@ protein → writes them to the VCF `INFO` field.
 | Documented: split multi-allelic records (`bcftools norm -m -any`) before `bcftools annotate` | Checked: on multi-allelic records bcftools annotate takes one matching annotation record, so only 367,680 of 945,891 alleles got a score; after the split, 945,891 / 945,891, identical to `annotate`. |
 | Performance (4 CPU cores, cached scores) | *E. coli*: 8.6 M SNVs, 49 s, 96 MB VCF / 68 MB TSV. Yeast, all transcripts: 19.3 M SNVs, 118 s / 88 s, 216 MB / 153 MB. |
 | Dog (user's machine, from the VESM 650M cache of `precompute`, no GPU work): ROS_Cfam_1.0, Ensembl 116, canonical transcripts | 20,566 transcripts, **73,800,615 missense SNVs** (73,901,519 SNV × transcript rows: a few SNVs fall in two overlapping canonical transcripts), `dog_ros_cfam_1.0.vesm_650m.snvs.vcf.gz` + index. Publishing it next to the Parquet dataset is the user's decision. |
+
+---
+
+## 2026-11-26 — Release 0.3.0 (prepared; not tagged)
+
+| Decision | Rationale |
+|---|---|
+| 0.3.0, not 1.0.0 (user's decision after discussion) | 1.0 would freeze CLI options, `OMS*` tags, export columns and the cache layout. Not yet: the export formats and the NCBI/prokaryote transcript IDs are new and unused by others; omnimissense depends on bcftools internals; the score's presentation (raw LLR, no percentile or threshold) is still open. Criteria for 1.0: a "Compatibility" section stating what is stable, protection against pysam/bcftools changes, a decision on score presentation, and outside feedback on 0.3.0 without format changes. |
+| `pysam>=0.24.1,<0.25` | pysam 0.24.1 (the latest, 2026-09-07) bundles bcftools 1.24: the genetic-code tables are copied from its `csq.c`, the `--dump-gff` format and the empty-VCF crash workaround were checked on it. A future pysam with another bcftools could change any of them silently for users (the CI tests would catch it, users would not). The bound moves after re-running the tests on the new version. |
+| Release checks | `uv lock` changes only the version and the pysam specifier (no dependency upgrades). `uv build`: wheel and sdist contain all modules (including `genetic_code.py`, `variant_export.py`), README and LICENSE; `twine check` passes for both; the wheel installed in a separate environment reports 0.3.0, `doctor` sees bcftools 1.24 (pysam 0.24.1), and `proteome` on *E. coli* gives the benchmark's numbers (4,297 ok, 3 internal stop, 18 pseudogene). 183 tests pass. |
+| Not tagged | Pushing tag `v0.3.0` publishes to PyPI (release workflow, trusted publishing): the user tags after the pull request is merged. |

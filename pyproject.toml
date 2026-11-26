@@ -1,6 +1,6 @@
 [project]
 name = "omnimissense"
-version = "0.2.0"
+version = "0.3.0"
 description = "Score missense variants in any species with protein language models, straight from a VCF."
 readme = "README.md"
 license = "MIT"
@@ -26,7 +26,7 @@ classifiers = [
 dependencies = [
     "numpy>=2",
     "pyarrow>=20",
-    "pysam>=0.24",
+    "pysam>=0.24.1,<0.25",  # bundles bcftools 1.24: csq tables and --dump-gff format
     "torch>=2.6",
     "tqdm>=4.66",
     "transformers>=4.56",
