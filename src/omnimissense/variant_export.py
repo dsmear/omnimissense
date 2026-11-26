@@ -48,6 +48,7 @@ from omnimissense.reference import (
     build_reference,
     load_reference,
     reference_key,
+    residue_batches,
     save_reference,
 )
 from omnimissense.sequences import AMINO_ACIDS
@@ -141,22 +142,25 @@ def export_variants(
         contigs = list(zip(genome.references, genome.lengths, strict=True))
         with pysam.BGZFile(str(output), "wb") as out:
             out.write((TSV_HEADER if kind == "tsv" else _vcf_header(contigs, model_name)).encode())
-            for seqid, _length in contigs:
-                tids = by_seqid.get(seqid)
-                if not tids:
-                    continue
-                sequences = {proteins[t].seq_hash: proteins[t].sequence for t in tids}
-                scores = cached_wt_scores(sequences, cache, scorer)
-                snvs = {
-                    t: transcript_snvs(
-                        genome, selected[t], proteins[t], scores[proteins[t].seq_hash][0]
-                    )
-                    for t in tids
+            groups = [(seqid, by_seqid[seqid]) for seqid, _ in contigs if seqid in by_seqid]
+            for batch in residue_batches(groups, proteins):
+                sequences = {
+                    proteins[t].seq_hash: proteins[t].sequence for _s, tids in batch for t in tids
                 }
-                rows, sites = _write_sequence(out, kind, seqid, snvs, selected, order, reference)
-                n_rows += rows
-                n_sites += sites
-                log.info("%s: %d transcripts, %d SNVs", seqid, len(tids), sites)
+                scores = cached_wt_scores(sequences, cache, scorer)
+                for seqid, tids in batch:
+                    snvs = {
+                        t: transcript_snvs(
+                            genome, selected[t], proteins[t], scores[proteins[t].seq_hash][0]
+                        )
+                        for t in tids
+                    }
+                    rows, sites = _write_sequence(
+                        out, kind, seqid, snvs, selected, order, reference
+                    )
+                    n_rows += rows
+                    n_sites += sites
+                    log.info("%s: %d transcripts, %d SNVs", seqid, len(tids), sites)
         needs_csi = any(length > _TBI_MAX for _name, length in contigs)
     if kind == "vcf":
         pysam.tabix_index(str(output), preset="vcf", force=True, csi=needs_csi)

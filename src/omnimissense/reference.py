@@ -1,8 +1,8 @@
 """Proteome-wide percentiles of the scores.
 
 The reference distribution of a genome annotation is the wild-type-marginal score of every
-possible missense SNV of its canonical protein-coding transcripts (the set that
-``export-variants`` writes by default). The percentile of a score is the share of that
+possible missense SNV of its canonical protein-coding transcripts, one value per SNV and
+transcript (the rows that ``export-variants`` writes by default). The percentile of a score is the share of that
 distribution with a lower (more damaging) score, in percent: 1.0 means "among the 1% most
 damaging missense changes possible in this genome". It is a monotone transform of the
 score: it changes no ranking, it only puts the score on a scale that reads the same for
@@ -21,7 +21,7 @@ import json
 import logging
 import uuid
 from collections import defaultdict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -102,6 +102,27 @@ def save_reference(cache_directory: Path, key: str, reference: Reference) -> Pat
     return path
 
 
+def residue_batches(
+    groups: Iterable[tuple[str, list[str]]],
+    proteins: Mapping[str, Protein],
+    limit: int = 2_000_000,
+) -> Iterator[list[tuple[str, list[str]]]]:
+    """Consecutive ``(seqid, transcript IDs)`` groups packed into batches of at most
+    ``limit`` residues (a larger group is a batch of its own): one cache read per batch
+    instead of one per sequence (genomes can have thousands of small scaffolds)."""
+    batch: list[tuple[str, list[str]]] = []
+    residues = 0
+    for seqid, tids in groups:
+        size = sum(len(proteins[t].sequence) for t in tids)
+        if batch and residues + size > limit:
+            yield batch
+            batch, residues = [], 0
+        batch.append((seqid, tids))
+        residues += size
+    if batch:
+        yield batch
+
+
 def build_reference(
     fasta: Path,
     transcripts: Mapping[str, Transcript],
@@ -111,7 +132,9 @@ def build_reference(
     """Reference distribution of the canonical transcripts with a scored protein.
 
     ``wt_scores`` maps ``{seq_hash: sequence}`` to wild-type-marginal matrices (from the cache,
-    computing what is missing); it is called once per sequence to bound memory.
+    computing what is missing); it is called once per batch of sequences to bound memory.
+    The reference holds one value per SNV and canonical transcript: an SNV in two overlapping
+    canonical transcripts counts once for each.
     """
     by_seqid: dict[str, list[str]] = defaultdict(list)
     for tid, tx in transcripts.items():
@@ -120,14 +143,15 @@ def build_reference(
             by_seqid[tx.seqid].append(tid)
     values = []
     with pysam.FastaFile(str(fasta)) as genome:
-        for tids in by_seqid.values():
+        for batch in residue_batches(by_seqid.items(), proteins):
+            tids = [t for _seqid, group in batch for t in group]
             matrices = wt_scores({proteins[t].seq_hash: proteins[t].sequence for t in tids})
             for tid in tids:
                 llr = matrices[proteins[tid].seq_hash][0]
                 values.append(transcript_snvs(genome, transcripts[tid], proteins[tid], llr).score)
     reference = Reference.from_scores(np.concatenate(values))
     log.info(
-        "Percentile reference: %d missense SNVs of %d canonical transcripts",
+        "Percentile reference: %d missense SNV x transcript values, %d canonical transcripts",
         reference.n_snvs,
         sum(len(t) for t in by_seqid.values()),
     )

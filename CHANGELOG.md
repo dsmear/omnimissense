@@ -23,6 +23,11 @@
   is: converted internally to GFF3, with the stop codon merged back into the CDS and the
   biotypes, tags and CDS attributes (`transl_table`, `transl_except`, `pseudo`) kept.
 
+- **Faster cache lookups**: an index of where each protein is stored replaces row-group
+  statistics, which could not skip anything (hashes are random, so every row group spans
+  almost the whole range): one protein 224 → 16 ms, 2,000 proteins 3.7 → 0.6 s on a 32-file
+  cache. The percentile reference and `export-variants` also read scores in batches of
+  sequences instead of once per sequence (dog: hundreds of small scaffolds).
 - README: a **Compatibility** section (what stays stable across 0.x versions: commands and
   options, `INFO` tags and `OMS` layout, append-only TSV columns, status values, score
   definitions; what does not: Python API, logs, cache layout) and a note that VESM's training

@@ -368,3 +368,14 @@ protein → writes them to the VCF `INFO` field.
 | **Checkpoint selection** uses an unsupervised proxy: Spearman correlation with the ESM-ensemble average (`esm11_avg`) on held-out human UniProt proteins (`ESM11_UPh_base_val.pkl`), minus 0.1 × the correlation with the base model. ProteinGym and ClinVar appear only in `inference.py` (evaluation). | `modelling/EsmCoDistiller.py` (`eval_epoch`), `train.py` |
 | Not verifiable here: whether design choices (number of rounds, aggregation, thresholds, hyperparameters) were tuned by looking at benchmark results; the paper (Nature Methods 2026, doi:10.1038/s41592-026-03050-9) is not reachable from the container. ProteinGym proteins are surely among the UniProtKB training sequences, without labels — as for ESM-2 (UniRef) and every protein language model. | |
 | Conclusion | Our ProteinGym-by-taxon numbers are not inflated by label leakage, as far as the released code shows. The dog benchmarks (OMIA, Dog10K) remain the fully independent evidence. |
+
+---
+
+## 2026-11-26 — Cache lookups and the dog percentile reference
+
+| Finding / decision | Rationale |
+|---|---|
+| Dog `precompute` with every protein cached, building only the percentile reference, took **9 min 20 s** (user's machine); expected ≈ 2 min from yeast (19.4 M values in 31 s). The reference held 73,901,519 values = exactly the export's rows (SNV × transcript), as designed (an SNV in two overlapping canonical transcripts counts once per transcript); the docs now say so. | |
+| Cause, measured: every `get_wt` call read about half of **every** cache file, whatever the number of proteins asked for: 224 ms for one protein on a 32-file cache (~7 ms per file), and the reference read the cache once per sequence (dog: hundreds of scaffolds × ~170 files). Row-group min/max pruning (Phase 2) cannot skip anything: hashes are random, so a row group of 128 sorted hashes spans almost the whole range. | The Phase 2 RAM fix (5.8 → 1.4 GB) came from reading row groups instead of whole files, not from skipping them. |
+| Fix: an in-memory index `seq_hash → {(file, row group)}`, built from the `seq_hash` column only (0.03 s on yeast) and extended with new files; lookups read only the row groups that hold the requested hashes. Plus batching: the reference and `export-variants` read scores per batch of sequences (≤ 2 M residues) instead of per sequence. | Yeast cache (32 files): one protein 224 → 16 ms, 2,000 proteins 3.69 → 0.63 s, identical values; reference build 31 → 9 s. Dog to be re-timed. |
+| Dog, other timings with the 0.3.0+ code (user's machine): `proteome` 21.6 s (0.2.0: ~10 s; csq now parses the GFF3 too, plus the extra scan) | |

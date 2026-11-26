@@ -182,7 +182,8 @@ ref_aa alt_aa protein_length n_windows wt_marginal masked_marginal status wt_per
 
 **Percentiles.** The raw score (a log-likelihood ratio) has no fixed scale. `OMS_WT_PCT` and
 `wt_percentile` give it one: the percent of all possible missense SNVs of the genome's
-canonical transcripts that have a lower (more damaging) score. `0.5` means "among the 0.5%
+canonical transcripts (one value per SNV and transcript) that have a lower (more damaging)
+score. `0.5` means "among the 0.5%
 most damaging missense changes possible in this genome", for any gene, species or model. It
 is a monotone transform of the score, so it changes no ranking. The reference distribution
 is built by `omnimissense precompute` (or `export-variants`) and stored in the cache, keyed
