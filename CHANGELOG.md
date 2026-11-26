@@ -15,6 +15,9 @@
   a call starting before the last position of the previous call on the same sequence failed
   with "the file is not sorted" (e.g. a mitochondrion listed before other contigs, or
   repeated API calls). Each csq call now runs in its own process (≈ 45 ms overhead).
+- **GTF annotations** (Ensembl, GENCODE, NCBI, AUGUSTUS/BRAKER) are accepted wherever a GFF3
+  is: converted internally to GFF3, with the stop codon merged back into the CDS and the
+  biotypes, tags and CDS attributes (`transl_table`, `transl_except`, `pseudo`) kept.
 
 ## 0.3.0 — 2026-11-26
 

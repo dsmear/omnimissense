@@ -25,11 +25,11 @@ _AA_CHANGE = re.compile(r"^(?P<pos>\d+)(?P<ref>[A-Z*]+)>(?P<alt_pos>\d+)(?P<alt>
 _DNA_CHANGE = re.compile(r"^(?P<pos>\d+)(?P<ref>[A-Za-z]+)>(?P<alt>[A-Za-z]+)$")
 
 _UNUSABLE_GFF_HINT = (
-    "bcftools csq found no usable transcripts in the GFF3. It reads GFF3 with genes, "
-    "transcripts and CDS (Ensembl, NCBI RefSeq; omnimissense also accepts CDS directly under "
-    "genes, as in prokaryotic files). Other layouts must be converted first: GTF to GFF3 with "
-    "e.g. AGAT or gffread; bcftools' misc/gff2gff fills in IDs and biotypes from "
-    "GENCODE-style attributes."
+    "bcftools csq found no usable transcripts in the annotation. It needs genes, transcripts "
+    "and CDS (omnimissense reads Ensembl, NCBI RefSeq, Prokka and Bakta GFF3, and GTF; it adds "
+    "a transcript to CDS directly under genes). Other layouts must be converted first, e.g. "
+    "with AGAT; bcftools' misc/gff2gff fills in IDs and biotypes from GENCODE-style "
+    "attributes."
 )
 
 

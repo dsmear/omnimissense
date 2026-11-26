@@ -35,7 +35,7 @@ exist for any sequenced genome:
 |---|---|
 | VCF | the variants (differences from the reference genome) |
 | FASTA | the reference genome sequence |
-| GFF3 | the gene annotation (where genes, exons and coding sequences are): Ensembl, NCBI RefSeq, Prokka or Bakta layout |
+| GFF3 or GTF | the gene annotation (where genes, exons and coding sequences are): Ensembl, NCBI RefSeq, GENCODE, Prokka, Bakta, AUGUSTUS/BRAKER |
 
 It outputs the same VCF (all records, all samples) with protein-language-model scores in the
 `INFO` field, plus a TSV with one row per missense consequence. It can also write the scores
@@ -364,11 +364,12 @@ What this says:
 
 ## Limitations
 
-- The GFF3 must describe genes and CDS: Ensembl, NCBI RefSeq, Prokka and Bakta layouts work.
-  CDS that hang directly from a gene or have no parent (prokaryotes, NCBI vertebrate
+- The annotation must describe genes and CDS: Ensembl, NCBI RefSeq, Prokka and Bakta GFF3
+  work; CDS that hang directly from a gene or have no parent (prokaryotes, NCBI vertebrate
   mitochondria) get a transcript feature (`tx-<CDS ID>`), and an embedded `##FASTA`
-  section is ignored, in a normalized copy that bcftools csq reads. GTF must be converted to
-  GFF3 first (e.g. AGAT or gffread).
+  section is ignored, in a normalized copy that bcftools csq reads. GTF (Ensembl, GENCODE,
+  NCBI, AUGUSTUS/BRAKER) is converted to GFF3 the same way, with the stop codon (outside the
+  CDS in GTF) merged back into the CDS; transcript IDs are the GTF's `transcript_id`.
 - Canonical transcripts come from `Ensembl_canonical`, `MANE Select` or `RefSeq Select`
   tags; genes without any tagged transcript get their longest CDS.
 - Mitochondrial transcripts whose genetic code is unknown (no `--mito-genetic-code`, no
