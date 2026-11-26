@@ -1,3 +1,5 @@
+import re
+
 import pytest
 from typer.testing import CliRunner
 
@@ -58,10 +60,15 @@ def test_proteome_command_writes_fasta(synthetic, tmp_path, option) -> None:
     assert output.read_text() == ">TXA\nMKRWLEHC\n>TXB\nMDPFGKWR\n"
 
 
+def _plain(text: str) -> str:
+    """Help text without colour codes (rich colours it when it detects CI or FORCE_COLOR)."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
 def test_export_is_a_hidden_alias_of_export_proteins() -> None:
-    commands = runner.invoke(app, ["--help"]).output
+    commands = _plain(runner.invoke(app, ["--help"]).output)
     assert "export-proteins" in commands and "export-variants" in commands
     assert " export " not in commands.replace("│", " ")
     alias = runner.invoke(app, ["export", "--help"])
     assert alias.exit_code == 0
-    assert "Parquet" in alias.output and "--annotation" in alias.output
+    assert "Parquet" in _plain(alias.output) and "--annotation" in _plain(alias.output)
