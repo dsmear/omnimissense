@@ -17,6 +17,7 @@ from chicken_omia import (
     in_protein_percentile,
     index_url,
     map_omia_via_refseq,
+    merge_spans,
     population_source,
     protein_accession,
     write_cds_bed,
@@ -37,6 +38,8 @@ def _population_vcf(path: Path) -> Path:
         ("20", "T", "C,G", "PASS", 30),  # multi-allelic
         ("25", "AT", "A", "PASS", 40),  # indel
         ("30", "C", "A", "PASS", 10),  # AF 0.052: common
+        ("50", "G", "C", "PASS", 30),  # common, in the merged span but outside the regions
+        ("65", "A", "T", "PASS", 30),  # common, in the third region
         ("150", "G", "T", "PASS", 60),  # outside the BED
     ]
     lines = [
@@ -60,13 +63,28 @@ def _population_vcf(path: Path) -> Path:
 def test_extract_common_snvs_keeps_common_pass_biallelic_snvs(synthetic, tmp_path) -> None:
     vcf = _population_vcf(tmp_path / "population.vcf.gz")
     bed = tmp_path / "cds.bed"
-    # two overlapping regions (a variant must be written once) and a sequence the VCF lacks
-    bed.write_text(f"{CHROM}\t5\t28\n{CHROM}\t25\t40\nMT\t0\t100\n")
+    # two overlapping regions (a variant must be written once), a third one read in the same
+    # span, and a sequence the VCF lacks
+    bed.write_text(f"{CHROM}\t5\t28\n{CHROM}\t25\t40\n{CHROM}\t60\t70\nMT\t0\t100\n")
     output = tmp_path / "common.vcf"
-    assert extract_common_snvs(str(vcf), bed, synthetic.fasta, output, 0.05) == 2
+    assert extract_common_snvs(str(vcf), bed, synthetic.fasta, output, 0.05, workers=2) == 3
+    assert (tmp_path / "common.parts" / f"{CHROM}.spans.bed").read_text() == f"{CHROM}\t5\t70\n"
     with pysam.VariantFile(str(output)) as result:
-        assert [(r.pos, r.ref, r.alts) for r in result] == [(10, "A", ("G",)), (30, "C", ("A",))]
+        assert [(r.pos, r.ref, r.alts) for r in result] == [
+            (10, "A", ("G",)),
+            (30, "C", ("A",)),
+            (65, "A", ("T",)),
+        ]
         assert list(result.header.contigs) == [CHROM]  # the FASTA's sequences
+
+
+def test_merge_spans() -> None:
+    assert merge_spans([(100, 200), (0, 50), (150, 300), (40_000, 40_100)], max_gap=10) == [
+        (0, 50),
+        (100, 300),
+        (40_000, 40_100),
+    ]
+    assert merge_spans([(0, 50), (100, 200)], max_gap=1000) == [(0, 200)]
 
 
 def test_population_source_keeps_local_paths(tmp_path) -> None:

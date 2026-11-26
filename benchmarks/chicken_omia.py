@@ -40,23 +40,24 @@ dog_realistic.py; without them they are skipped with a warning. Then:
 from __future__ import annotations
 
 import argparse
+import bisect
 import csv
 import hashlib
 import logging
 import random
 import re
+import subprocess
 import sys
 import tempfile
 import time
 import urllib.parse
 import urllib.request
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
 import pysam
-import pysam.bcftools
-import pysam.utils
 
 sys.path.insert(0, str(Path(__file__).parent))
 from blosum import BLOSUM62
@@ -278,30 +279,68 @@ def population_source(vcf: str, index: str | None, data_dir: Path) -> str:
     return f"{vcf}##idx##{local}"
 
 
-def _query_common(source: str, bed: Path, min_af: float, attempts: int = 4) -> str:
-    """Sites (no genotypes) of PASS biallelic SNVs with ALT frequency >= min_af in the BED
-    regions; retried, as long remote reads occasionally fail."""
+#: Runs ``bcftools view`` (pysam) with the given arguments in its own interpreter, so that
+#: several sequences can be read at once; a failure exits with status 1.
+_VIEW_RUNNER = """
+import sys
+import pysam.bcftools
+import pysam.utils
+pysam.set_verbosity(0)
+try:
+    pysam.bcftools.view(*sys.argv[1:], catch_stdout=False)
+except pysam.utils.SamtoolsError as exc:
+    sys.stderr.write(str(exc))
+    sys.exit(1)
+"""
+
+
+def merge_spans(intervals: list[tuple[int, int]], max_gap: int = 20_000) -> list[tuple[int, int]]:
+    """Merge sorted BED intervals separated by less than ``max_gap`` bases: one remote read per
+    gene (or cluster of genes) instead of one per exon."""
+    spans: list[list[int]] = []
+    for start, end in sorted(intervals):
+        if spans and start - spans[-1][1] < max_gap:
+            spans[-1][1] = max(spans[-1][1], end)
+        else:
+            spans.append([start, end])
+    return [(a, b) for a, b in spans]
+
+
+def _query_common(
+    source: str, spans: Path, output: Path, min_af: float, attempts: int = 4
+) -> float:
+    """Write the sites (no genotypes) of PASS biallelic SNVs with ALT frequency >= min_af in
+    the spans to ``output``; retried, as long remote reads occasionally fail. Returns the
+    time taken in seconds."""
+    args = [
+        "-R", str(spans), "-f", "PASS,.", "-m2", "-M2", "-v", "snps", "-q", f"{min_af}:alt1",
+        "-G", "-Ov", "-o", str(output), source,
+    ]  # fmt: skip
+    started = time.monotonic()
     for attempt in range(1, attempts + 1):
-        previous = pysam.set_verbosity(0)
-        try:
-            return pysam.bcftools.view(
-                "-R", str(bed), "-f", "PASS,.", "-m2", "-M2", "-v", "snps",
-                "-q", f"{min_af}:alt1", "-G", "-Ov", source,
-                catch_stdout=True,
-            )  # fmt: skip
-        except pysam.utils.SamtoolsError as exc:
-            if attempt == attempts:
-                raise
-            log.warning("Population query failed (%s), retrying (%d/%d)", exc, attempt, attempts)
-            time.sleep(10 * attempt)
-        finally:
-            pysam.set_verbosity(previous)
+        process = subprocess.run(
+            [sys.executable, "-c", _VIEW_RUNNER, *args], capture_output=True, text=True
+        )
+        if process.returncode == 0:
+            return time.monotonic() - started
+        if attempt == attempts:
+            raise RuntimeError(f"bcftools view failed: {process.stderr.strip()}")
+        log.warning(
+            "Population query failed (%s), retrying (%d/%d)",
+            process.stderr.strip()[-200:],
+            attempt,
+            attempts,
+        )
+        time.sleep(10 * attempt)
     raise AssertionError("unreachable")
 
 
-def extract_common_snvs(source: str, bed: Path, fasta: Path, output: Path, min_af: float) -> int:
-    """Query the population VCF sequence by sequence (each part cached on disk) and write the
-    common SNVs, sorted, with the FASTA's contigs; returns the number of SNVs."""
+def extract_common_snvs(
+    source: str, bed: Path, fasta: Path, output: Path, min_af: float, workers: int = 4
+) -> int:
+    """Query the population VCF over the merged spans of the BED regions, ``workers``
+    sequences at a time (each sequence cached on disk), keep the SNVs inside the BED regions
+    and write them, sorted, with the FASTA's contigs; returns the number of SNVs."""
     previous = pysam.set_verbosity(0)
     try:
         with pysam.VariantFile(source) as vcf:
@@ -311,31 +350,53 @@ def extract_common_snvs(source: str, bed: Path, fasta: Path, output: Path, min_a
     with pysam.FastaFile(str(fasta)) as genome:
         contigs = list(zip(genome.references, genome.lengths, strict=True))
     order = {name: i for i, (name, _) in enumerate(contigs)}
-    regions: dict[str, list[str]] = defaultdict(list)
+    regions: dict[str, list[tuple[int, int]]] = defaultdict(list)
     for line in bed.read_text().splitlines():
-        chrom = line.split("\t")[0]
+        chrom, start, end = line.split("\t")[:3]
         if chrom in available:
-            regions[chrom].append(line)
+            regions[chrom].append((int(start), int(end)))
     parts = output.with_suffix(".parts")
     parts.mkdir(parents=True, exist_ok=True)
+
+    def fetch_part(chrom: str) -> None:
+        part = parts / f"{chrom}.vcf"
+        if part.exists():
+            return
+        spans = merge_spans(regions[chrom])
+        spans_bed = parts / f"{chrom}.spans.bed"
+        spans_bed.write_text("".join(f"{chrom}\t{a}\t{b}\n" for a, b in spans))
+        tmp = part.with_suffix(".tmp")
+        seconds = _query_common(source, spans_bed, tmp, min_af)
+        tmp.rename(part)
+        log.info(
+            "Population VCF, sequence %s: %d regions in %d spans, %.0f s",
+            chrom,
+            len(regions[chrom]),
+            len(spans),
+            seconds,
+        )
+
+    chroms = sorted(regions, key=lambda c: order[c])
+    log.info("Reading the population VCF: %d sequences, %d at a time", len(chroms), workers)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(fetch_part, chroms))
+
     definitions: list[str] = []
     records: dict[tuple[str, ...], list[str]] = {}
-    for chrom in sorted(regions, key=lambda c: order[c]):
-        part = parts / f"{chrom}.vcf"
-        if not part.exists():
-            chrom_bed = parts / f"{chrom}.bed"
-            chrom_bed.write_text("\n".join(regions[chrom]) + "\n")
-            log.info("Population VCF, sequence %s: %d regions", chrom, len(regions[chrom]))
-            tmp = part.with_suffix(".tmp")
-            tmp.write_text(_query_common(source, chrom_bed, min_af))
-            tmp.rename(part)
-        for line in part.read_text().splitlines():
+    for chrom in chroms:
+        intervals = sorted(regions[chrom])
+        starts = [a for a, _ in intervals]
+        ends = np.maximum.accumulate([b for _, b in intervals])  # for overlapping intervals
+        for line in (parts / f"{chrom}.vcf").read_text().splitlines():
             if line.startswith("##INFO") or line.startswith("##FILTER"):
                 if line not in definitions:
                     definitions.append(line)
             elif line and not line.startswith("#"):
                 fields = line.split("\t")
-                records.setdefault(tuple(fields[:5]), fields[:8])  # overlapping regions repeat
+                pos = int(fields[1])
+                k = bisect.bisect_left(starts, pos) - 1  # last interval starting before pos
+                if k >= 0 and pos <= ends[k]:  # BED: start < pos <= end (1-based pos)
+                    records.setdefault(tuple(fields[:5]), fields[:8])
     body = sorted(records.values(), key=lambda f: (order[f[0]], int(f[1]), f[4]))
     header = ["##fileformat=VCFv4.2", *definitions]
     header += [f"##contig=<ID={name},length={length}>" for name, length in contigs]
