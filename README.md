@@ -5,8 +5,10 @@
 
 **Score missense variants in any species with protein language models, straight from a VCF.**
 
-> **Status: alpha.** The pipeline works end to end, reproduces published ESM-2 results and
-> separates known dog disease variants from common dog variants (see [Validation](#validation)).
+> **Status: alpha.** The pipeline works end to end on Ensembl and NCBI annotations (dog, yeast,
+> *E. coli*: proteomes identical to the reference translations), reproduces published ESM-2
+> results and separates known dog disease variants from common dog variants (see
+> [Validation](#validation)).
 > The scores measure how disruptive a substitution looks to the protein, **not** whether it
 > causes disease: do not use them alone for breeding or clinical decisions.
 
@@ -27,7 +29,9 @@ exist for any sequenced genome:
 | GFF3 | the gene annotation (where genes, exons and coding sequences are): Ensembl, NCBI RefSeq, Prokka or Bakta layout |
 
 It outputs the same VCF (all records, all samples) with protein-language-model scores in the
-`INFO` field, plus a TSV with one row per missense consequence.
+`INFO` field, plus a TSV with one row per missense consequence. It can also write the scores
+of every possible missense SNV of a genome, so that VCFs can later be annotated with bcftools
+alone ([Annotating without a GPU](#annotating-without-a-gpu)).
 
 ## How it works
 
@@ -85,6 +89,9 @@ uv run omnimissense export --fasta $FASTA --gff3 $GFF3 -o dog_scores.parquet
 uv run omnimissense export-variants --fasta $FASTA --gff3 $GFF3 -o dog_snvs.vcf.gz
 ```
 
+The plain-gzip FASTA distributed by Ensembl is recompressed once to BGZF (`.fa.bgz`) next to
+the original, because random access needs it.
+
 ### Annotating without a GPU
 
 `export-variants` writes every possible missense SNV of the canonical coding transcripts
@@ -95,12 +102,14 @@ uv run omnimissense export-variants --fasta $FASTA --gff3 $GFF3 -o dog_snvs.vcf.
   protein_variant oms_wt`), for R, pandas or `bcftools annotate -c`.
 
 Any VCF can then be annotated with bcftools alone, in seconds. Split multi-allelic records
-first: `bcftools annotate` matches one annotation record per VCF record, so without the split
-only one ALT of a multi-allelic record gets its score.
+first (`bcftools annotate` matches one annotation record per VCF record, so without the split
+only one ALT of a multi-allelic record gets its score), and index the result (`bcftools
+annotate` with a VCF annotation file needs an indexed input):
 
 ```bash
-bcftools norm -m -any my_dogs.vcf.gz -W -Oz -o my_dogs.split.vcf.gz
-bcftools annotate -a dog_snvs.vcf.gz -c INFO/OMS,INFO/OMS_WT my_dogs.split.vcf.gz -Oz -o my_dogs.oms.vcf.gz
+bcftools norm -m -any -Oz -o my_dogs.split.vcf.gz my_dogs.vcf.gz
+bcftools index -t my_dogs.split.vcf.gz
+bcftools annotate -a dog_snvs.vcf.gz -c INFO/OMS,INFO/OMS_WT -Oz -o my_dogs.oms.vcf.gz my_dogs.split.vcf.gz
 ```
 
 The result is identical to `omnimissense annotate` for SNVs (checked on every SNV of 300
@@ -111,12 +120,10 @@ not in the file. Sizes: dog (canonical transcripts) 73.8 M SNVs; *E. coli* 8.6 M
 96 MB (VCF) in 49 s; yeast (all transcripts) 19.3 M SNVs, 216 MB (VCF) or 153 MB (TSV) in
 1–2 min, from cached scores.
 
-The plain-gzip FASTA distributed by Ensembl is recompressed once to BGZF (`.fa.bgz`) next to
-the original, because random access needs it.
+### Other species
 
-**Other species.** Any assembly with an Ensembl or NCBI RefSeq annotation works the same way,
-prokaryotes included (Prokka and Bakta GFF3 too).
-From NCBI, take `<assembly>_genomic.fna.gz` and `<assembly>_genomic.gff.gz` from the
+Any assembly with an Ensembl or NCBI RefSeq annotation works the same way, prokaryotes
+included (Prokka and Bakta GFF3 too). From NCBI, take `<assembly>_genomic.fna.gz` and `<assembly>_genomic.gff.gz` from the
 assembly's FTP folder (e.g. `genomes/all/GCF/000/146/045/GCF_000146045.2_R64/` for yeast);
 transcript IDs are then NCBI's (`rna-NM_…`, `rna-XM_…`). The VCF must use the same sequence
 names as the FASTA (NCBI: accessions such as `NC_001133.9`).
@@ -176,6 +183,12 @@ flagged `pseudo=true` by NCBI: a disrupted gene). Only `ok` rows are scored.
 | Annotate 127,270 dog variants (chr38, 0–5 Mb; 1,689 missense consequences), default settings | 25 s on first run, 12 s when the proteins are cached (1.2 GB RAM) |
 | Same, with `--masked` (ESM-2) | 137 s on first run, 13 s when cached |
 | Proteome translation | ~10 s (after the one-off BGZF conversion of the genome, ~3 min) |
+| `export-variants`, from cached scores (4 CPU cores, no GPU) | *E. coli* 8.6 M SNVs in 49 s; yeast 19.3 M SNVs in 1–2 min |
+| ProteinGym, all 217 assays, wild-type marginals | ~15 s of GPU per model |
+
+The dog annotation and translation times were measured with version 0.2.0. Since 0.3.0 the
+GFF3 is also parsed by csq and scanned once more (prokaryotic layout, genetic codes); these
+times have not been re-measured.
 
 ## Validation
 
@@ -345,6 +358,8 @@ What this says:
   that change the same codon are scored separately.
 - Variants changing several residues at once (MNVs) are reported but not scored.
 - Scores are raw log-likelihood ratios, not calibrated probabilities of pathogenicity.
+- Viral proteins are scored less reliably than cellular ones (ProteinGym: VESM 0.43 on
+  viruses vs 0.47–0.52 elsewhere; alignment-based methods ≈0.47 on viruses).
 
 ## Installation
 
@@ -397,8 +412,9 @@ redistributed: they are downloaded from Hugging Face on first use. Select a mode
 
 ## Citation
 
-If you use omnimissense, please also cite the model you scored with, e.g. ESM-2:
-Lin et al., *Evolutionary-scale prediction of atomic-level protein structure with a language
-model*, Science 379, 1123–1130 (2023). The long-protein windowing follows Brandes et al.,
+If you use omnimissense, please also cite the model you scored with: for the default model,
+VESM (Dinh, Jang, Zaitlen & Ntranos, 2025; <https://github.com/ntranoslab/vesm>), which is
+built on ESM-2: Lin et al., *Evolutionary-scale prediction of atomic-level protein structure
+with a language model*, Science 379, 1123–1130 (2023). The long-protein windowing follows Brandes et al.,
 *Genome-wide prediction of disease variant effects with a deep protein language model*,
 Nat Genet 55, 1512–1522 (2023).
