@@ -1,39 +1,55 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-11-26
+
+A genome-wide scale for the score, selenoproteins, GTF input, MNVs, and a much faster cache.
+
+**New**
 
 - **Proteome-wide percentile** of the score: `OMS_WT_PCT` (VCF) and `wt_percentile` (TSV,
   last column) in `annotate`; `OMS_WT_PCT` and `oms_wt_percentile` in `export-variants`. The
-  percent of all possible missense SNVs of the canonical transcripts with a more damaging
-  score; built once by `precompute` (or `export-variants`) and stored in the cache. Existing
-  fields and columns are unchanged.
+  percent of all possible missense SNVs of the canonical transcripts (one value per SNV and
+  transcript) with a more damaging score: a monotone transform, no ranking changes. Built
+  once by `precompute` (or `export-variants`) and stored in the cache, keyed by the
+  annotation, genome and genetic codes. **After upgrading, run `precompute` once** (scores
+  already cached are reused: about a minute for the dog) to get percentiles in `annotate`.
 - **Selenocysteine and pyrrolysine** from NCBI `transl_except`: the codon is read as `U` /
   `O` instead of a stop, so selenoproteins are translated and their variants scored (the
-  recoded codon itself is not; csq calls its changes `stop_lost`). *E. coli*: 4,300 / 4,300
-  proteins identical to NCBI, the 3 selenoproteins included.
-- Fixed: bcftools csq kept state between calls in one process (pysam runs it in-process):
-  a call starting before the last position of the previous call on the same sequence failed
-  with "the file is not sorted" (e.g. a mitochondrion listed before other contigs, or
-  repeated API calls). Each csq call now runs in its own process (≈ 45 ms overhead).
-- **Multi-residue changes** (an MNV over two codons, csq `4WL>4CM`) are scored as the sum of
-  their single substitutions (wild-type and masked), every reference residue checked;
-  previously reported as `multi_aa_change` and not scored. `multi_aa_change` now only means
-  a change of protein length.
+  recoded codon itself is not; csq calls its changes `stop_lost`).
 - **GTF annotations** (Ensembl, GENCODE, NCBI, AUGUSTUS/BRAKER) are accepted wherever a GFF3
-  is: converted internally to GFF3, with the stop codon merged back into the CDS and the
-  biotypes, tags and CDS attributes (`transl_table`, `transl_except`, `pseudo`, `locus_tag`)
-  kept. Yeast NCBI GTF: same 6,021 / 6,021 proteins and identical `annotate` results as the
-  GFF3.
+  is: converted internally, with the stop codon merged back into the CDS and the biotypes,
+  tags and CDS attributes (`transl_table`, `transl_except`, `pseudo`, `locus_tag`) kept.
+- **Multi-residue changes** (an MNV over two codons, csq `4WL>4CM`) are scored as the sum of
+  their single substitutions (wild-type and masked), every reference residue checked.
 
-- **Faster cache lookups**: an index of where each protein is stored replaces row-group
-  statistics, which could not skip anything (hashes are random, so every row group spans
-  almost the whole range): one protein 224 → 16 ms, 2,000 proteins 3.7 → 0.6 s on a 32-file
-  cache. The percentile reference and `export-variants` also read scores in batches of
-  sequences instead of once per sequence (dog: hundreds of small scaffolds).
-- README: a **Compatibility** section (what stays stable across 0.x versions: commands and
-  options, `INFO` tags and `OMS` layout, append-only TSV columns, status values, score
-  definitions; what does not: Python API, logs, cache layout) and a note that VESM's training
-  uses no ProteinGym or other experimental labels.
+**Changes in behaviour**
+
+- New `INFO` tag `OMS_WT_PCT` and new last TSV columns; existing tags, the `OMS` layout and
+  existing columns are unchanged.
+- Variants that were `multi_aa_change` (MNVs over two codons) or `protein_unavailable`
+  (selenoproteins with `transl_except`) are now scored; `multi_aa_change` only means a change
+  of protein length.
+
+**Fixes and performance**
+
+- bcftools csq kept state between calls in one process (pysam runs it in-process): a call
+  starting before the last position of the previous call on the same sequence failed with
+  "the file is not sorted" (e.g. a mitochondrion listed before other contigs, or repeated
+  API calls). Each csq call now runs in its own process (≈ 45 ms).
+- Cache lookups read about half of every cache file whatever was asked for (row-group
+  statistics cannot prune random hashes). An index of where each protein is stored now reads
+  only the needed row groups, and the percentile reference and `export-variants` read scores
+  in batches of sequences: one protein 224 → 16 ms; dog percentile reference 9 min 20 s → 50 s.
+  The cache format is unchanged.
+
+**Documentation and validation**
+
+- README: a **Compatibility** section (what stays stable across 0.x versions) and a note that
+  VESM's training uses no ProteinGym or other experimental labels (checked in its released
+  training code).
+- Dataset card: the dog genome-level VCF (73.8 M missense SNVs) published on Hugging Face.
+- *E. coli*: 4,300 / 4,300 proteins identical to NCBI, the 3 selenoproteins included. Yeast
+  NCBI GTF: the same 6,021 / 6,021 proteins and identical `annotate` results as the GFF3.
 
 ## 0.3.0 — 2026-11-26
 
