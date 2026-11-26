@@ -260,14 +260,21 @@ def map_omia_via_refseq(
 # ---------------------------------------------------------------------------- population
 
 
+def index_url(vcf: str, index: str | None) -> str:
+    """Index of a remote VCF: the one given, EVA's for the default VCF (named ``.vcf.csi``,
+    which htslib does not find on its own), else ``<vcf>.csi``."""
+    if index:
+        return index
+    return POPULATION_INDEX if vcf == POPULATION_VCF else f"{vcf}.csi"
+
+
 def population_source(vcf: str, index: str | None, data_dir: Path) -> str:
     """htslib path of the population VCF: a local file as is, or a URL read remotely with a
-    local copy of its index (the EVA index is named ``.vcf.csi``, which htslib does not find
-    on its own)."""
+    local copy of its index."""
     if not vcf.startswith(("http://", "https://", "ftp://")):
         return vcf
-    index = index or f"{vcf}.csi"
-    local = fetch(index, data_dir / index.rsplit("/", 1)[-1])
+    url = index_url(vcf, index)
+    local = fetch(url, data_dir / url.rsplit("/", 1)[-1])
     return f"{vcf}##idx##{local}"
 
 

@@ -9,10 +9,13 @@ from synthetic import CHROM
 sys.path.insert(0, str(Path(__file__).parents[1] / "benchmarks"))
 
 from chicken_omia import (
+    POPULATION_INDEX,
+    POPULATION_VCF,
     auroc_row,
     extract_common_snvs,
     fetch_refseq_proteins,
     in_protein_percentile,
+    index_url,
     map_omia_via_refseq,
     population_source,
     protein_accession,
@@ -68,6 +71,13 @@ def test_extract_common_snvs_keeps_common_pass_biallelic_snvs(synthetic, tmp_pat
 
 def test_population_source_keeps_local_paths(tmp_path) -> None:
     assert population_source("data/x.vcf.gz", None, tmp_path) == "data/x.vcf.gz"
+
+
+def test_index_url_of_the_default_eva_vcf() -> None:
+    assert index_url(POPULATION_VCF, None) == POPULATION_INDEX  # EVA names it .vcf.csi
+    assert POPULATION_INDEX.endswith(".vcf.csi")
+    assert index_url("https://x/y.vcf.gz", None) == "https://x/y.vcf.gz.csi"
+    assert index_url("https://x/y.vcf.gz", "https://x/y.tbi") == "https://x/y.tbi"
 
 
 def test_write_cds_bed(tmp_path) -> None:
