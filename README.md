@@ -107,8 +107,9 @@ The result is identical to `omnimissense annotate` for SNVs (checked on every SN
 random genes in yeast and in *E. coli*; see Validation). `annotate` is still needed for
 masked marginals and for what the file does not hold: MNVs, and transcripts that are not
 exported. Changes of a start codon (start lost) or to a stop codon are not missense and are
-not in the file. Sizes: *E. coli* 8.6 M SNVs, 96 MB (VCF) in 49 s; yeast (all transcripts)
-19.3 M SNVs, 216 MB (VCF) or 153 MB (TSV) in 1–2 min, from cached scores.
+not in the file. Sizes: dog (canonical transcripts) 73.8 M SNVs; *E. coli* 8.6 M SNVs,
+96 MB (VCF) in 49 s; yeast (all transcripts) 19.3 M SNVs, 216 MB (VCF) or 153 MB (TSV) in
+1–2 min, from cached scores.
 
 The plain-gzip FASTA distributed by Ensembl is recompressed once to BGZF (`.fa.bgz`) next to
 the original, because random access needs it.
