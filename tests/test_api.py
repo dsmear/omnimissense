@@ -98,7 +98,7 @@ def test_annotate_matches_the_pipeline(synthetic, tmp_path, model, tiny_scorer) 
     result = om.annotate(
         synthetic.vcf,
         fasta=synthetic.fasta,
-        gff3=synthetic.gff3,
+        annotation=synthetic.gff3,
         model=model,
         output_tsv=tmp_path / "api.tsv",
     )
@@ -143,7 +143,7 @@ def test_annotate_tables_and_files(synthetic, tmp_path, model) -> None:
     result = om.annotate(
         synthetic.vcf,
         fasta=synthetic.fasta,
-        gff3=synthetic.gff3,
+        annotation=synthetic.gff3,
         model=model,
         masked=True,
         output_vcf=tmp_path / "out.vcf.gz",
@@ -170,7 +170,9 @@ def test_annotate_tables_and_files(synthetic, tmp_path, model) -> None:
 def test_precompute_then_annotate_reports_percentiles(synthetic, model) -> None:
     done = om.precompute(synthetic.fasta, synthetic.gff3, model=model)
     assert done.n_scored == done.n_unique_proteins and done.reference_snvs > 0
-    result = om.annotate(synthetic.vcf, fasta=synthetic.fasta, gff3=synthetic.gff3, model=model)
+    result = om.annotate(
+        synthetic.vcf, fasta=synthetic.fasta, annotation=synthetic.gff3, model=model
+    )
     assert all(0 <= v.wt_percentile <= 100 for v in result)
 
 

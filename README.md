@@ -8,7 +8,7 @@
 ```bash
 pip install omnimissense        # or: uv tool install omnimissense
 omnimissense doctor             # checks bcftools (bundled), PyTorch, CUDA
-omnimissense annotate --vcf my.vcf.gz --fasta genome.fa.gz --gff3 genes.gff3.gz -o my.oms.vcf.gz
+omnimissense annotate --vcf my.vcf.gz --fasta genome.fa.gz --annotation genes.gff3.gz -o my.oms.vcf.gz
 ```
 
 Python ≥ 3.11; a CUDA GPU is strongly recommended (CPU works but is slow). bcftools is bundled
@@ -87,16 +87,16 @@ FASTA=data/dog/Canis_lupus_familiaris.ROS_Cfam_1.0.dna.toplevel.fa.gz
 GFF3=data/dog/Canis_lupus_familiaris.ROS_Cfam_1.0.116.gff3.gz
 
 # optional, once: score the whole proteome into the cache (default model: VESM 650M)
-omnimissense precompute --fasta $FASTA --gff3 $GFF3
+omnimissense precompute --fasta $FASTA --annotation $GFF3
 
-omnimissense annotate --vcf my_dogs.vcf.gz --fasta $FASTA --gff3 $GFF3 \
+omnimissense annotate --vcf my_dogs.vcf.gz --fasta $FASTA --annotation $GFF3 \
     -o my_dogs.omnimissense.vcf.gz          # also writes my_dogs.omnimissense.tsv
 
 # optional: all scores of all coding transcripts in one Parquet file
-omnimissense export --fasta $FASTA --gff3 $GFF3 -o dog_scores.parquet
+omnimissense export-proteins --fasta $FASTA --annotation $GFF3 -o dog_scores.parquet
 
 # optional: every possible missense SNV at genome coordinates (no GPU needed afterwards)
-omnimissense export-variants --fasta $FASTA --gff3 $GFF3 -o dog_snvs.vcf.gz
+omnimissense export-variants --fasta $FASTA --annotation $GFF3 -o dog_snvs.vcf.gz
 ```
 
 The plain-gzip FASTA distributed by Ensembl is recompressed once to BGZF (`.fa.bgz`) next to
@@ -162,7 +162,7 @@ vertebrate mitochondria (3 yeast, 5 invertebrates) or `--genetic-code 6` for cil
 |---|---|---|---|
 | Dog | ROS_Cfam_1.0, Ensembl 116 (43,524 coding transcripts) | VESM 650M, wild-type marginal | [DavideMacchia/omnimissense-dog-ros-cfam-1.0-vesm-650m](https://huggingface.co/datasets/DavideMacchia/omnimissense-dog-ros-cfam-1.0-vesm-650m) (Parquet, 1.55 GB, CC-BY-4.0) |
 
-Produced with `omnimissense precompute` + `omnimissense export`; the dataset card documents the
+Produced with `omnimissense precompute` + `omnimissense export` (now `export-proteins`); the dataset card documents the
 schema, provenance and limitations.
 
 ## Output
@@ -211,7 +211,7 @@ scores["Y5D"]  # -> float; also "p.Y5D", "p.(Tyr5Asp)"
 scores.to_pandas()  # position, ref_aa, alt_aa, change, wt_marginal
 
 # a VCF, as `omnimissense annotate` does
-result = om.annotate("calls.vcf.gz", fasta="genome.fa.gz", gff3="genes.gff3.gz", model=model)
+result = om.annotate("calls.vcf.gz", fasta="genome.fa.gz", annotation="genes.gff3.gz", model=model)
 for v in result:  # one AnnotatedVariant per ALT allele and transcript
     if v.is_scored:
         print(v.gene, v.transcript, v.protein_change, v.wt_marginal, v.wt_percentile)
@@ -493,8 +493,9 @@ guarantees.
 **Kept stable across 0.x versions** (a change needs a deprecation note in the changelog and a
 new minor version):
 
-- command names and their options: `annotate`, `precompute`, `export`, `export-variants`,
-  `proteome`, `doctor`;
+- command names and their options: `annotate`, `precompute`, `export-proteins` (formerly
+  `export`, still accepted), `export-variants`, `proteome`, `doctor`; `--annotation` was
+  called `--gff3` before 0.5.0 and that name keeps working;
 - VCF `INFO` tags (`OMS`, `OMS_WT`, `OMS_WT_PCT`, `OMS_MM`, `OMS_REF_MISMATCH`) and the order
   of the 10 fields of an `OMS` entry; new information comes as new tags;
 - TSV columns of `annotate` and `export-variants`: append-only (new columns at the end,
@@ -515,7 +516,7 @@ reference is keyed by the annotation, genome and genetic codes.
 
 **Reproducibility.** Scores depend on the model (with its pinned revision), the genome, the
 annotation, the genetic codes and the omnimissense version; output VCFs record the version and
-the model (`##omnimissenseVersion`, `##omnimissenseModel`), `export` files all of them.
+the model (`##omnimissenseVersion`, `##omnimissenseModel`), `export-proteins` files all of them.
 `pysam` is pinned to the 0.24 series (bcftools 1.24), because omnimissense relies on bcftools
 csq's genetic-code tables and `--dump-gff` format; the pin moves only after the test suite
 passes on a new version.

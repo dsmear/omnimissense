@@ -104,7 +104,7 @@ def export_variants(
 ) -> VariantExportResult:
     """Write every missense SNV of the canonical (or all) coding transcripts with its score.
 
-    Missing scores are computed with the model, like ``export``.
+    Missing scores are computed with the model, like ``export-proteins``.
     """
     kind = _format(output)
     fasta = prepare_fasta(fasta)

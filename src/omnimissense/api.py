@@ -9,7 +9,7 @@ promise of the README (section *Compatibility*)::
     scores = model.score_protein("MKTAYIAKQRQISFVKSHFSRQ")
     scores["Y5D"]                             # log-likelihood ratio; lower = more damaging
 
-    result = om.annotate("calls.vcf.gz", fasta="genome.fa", gff3="genes.gff3", model=model)
+    result = om.annotate("calls.vcf.gz", fasta="genome.fa", annotation="genes.gff3", model=model)
     for v in result:
         print(v.gene, v.protein_change, v.wt_marginal, v.wt_percentile, v.status)
     table = result.to_pandas()                # needs pandas: pip install 'omnimissense[pandas]'
@@ -450,7 +450,7 @@ def annotate(
     vcf: PathLike,
     *,
     fasta: PathLike,
-    gff3: PathLike,
+    annotation: PathLike,
     model: Model | str | None = None,
     masked: bool = False,
     output_vcf: PathLike | None = None,
@@ -461,12 +461,13 @@ def annotate(
 ) -> AnnotatedVariants:
     """Score the missense variants of a VCF, as ``omnimissense annotate`` does.
 
-    ``fasta`` is the reference genome (plain, gzip or BGZF) and ``gff3`` its annotation
-    (GFF3 or GTF: Ensembl, NCBI RefSeq, Prokka, Bakta). ``model`` is a ``Model`` or a model
-    name (default VESM 650M). With ``output_vcf`` (``.vcf.gz``, ``.bcf`` or ``.vcf``), the
-    input VCF is also written with the ``BCSQ`` and ``OMS*`` INFO tags; with ``output_tsv``,
-    the same table the command line writes. ``genetic_code`` / ``mito_genetic_code``: NCBI
-    translation tables; default from the GFF3 (see the README, *Genetic codes*).
+    ``fasta`` is the reference genome (plain, gzip or BGZF) and ``annotation`` its genes
+    (GFF3 or GTF: Ensembl, NCBI RefSeq, GENCODE, Prokka, Bakta, AUGUSTUS/BRAKER).
+    ``model`` is a ``Model`` or a model name (default VESM 650M). With ``output_vcf``
+    (``.vcf.gz``, ``.bcf`` or ``.vcf``), the input VCF is also written with the ``BCSQ`` and
+    ``OMS*`` INFO tags; with ``output_tsv``, the same table the command line writes.
+    ``genetic_code`` / ``mito_genetic_code``: NCBI translation tables; default from the
+    annotation (see the README, *Genetic codes*).
 
     Raises ``ReferenceMismatchError`` (a ``ValueError``) when most records disagree with
     the genome: a VCF called on another assembly, or with other sequence names.
@@ -475,7 +476,7 @@ def annotate(
     result = _annotate(
         Path(vcf),
         Path(fasta),
-        Path(gff3),
+        Path(annotation),
         Path(output_vcf) if output_vcf is not None else None,
         Path(output_tsv) if output_tsv is not None else None,
         cache=model.cache,
@@ -496,7 +497,7 @@ def annotate(
 
 def precompute(
     fasta: PathLike,
-    gff3: PathLike,
+    annotation: PathLike,
     *,
     model: Model | str | None = None,
     progress: bool = False,
@@ -509,7 +510,7 @@ def precompute(
     model = _model(model)
     return _precompute(
         Path(fasta),
-        Path(gff3),
+        Path(annotation),
         cache=model.cache,
         scorer_factory=model._scorer.get,
         progress=progress,

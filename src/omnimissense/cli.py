@@ -34,9 +34,12 @@ FastaOption = Annotated[
 Gff3Option = Annotated[
     Path,
     typer.Option(
+        "--annotation",
+        "--gff3",
         exists=True,
         dir_okay=False,
-        help="GFF3 annotation (Ensembl, NCBI RefSeq, Prokka or Bakta layout).",
+        help="Genome annotation, GFF3 or GTF (Ensembl, NCBI RefSeq, GENCODE, Prokka, Bakta, "
+        "AUGUSTUS/BRAKER); --gff3 is the same option under its former name.",
     ),
 ]
 
@@ -225,8 +228,8 @@ def precompute(
         typer.echo(f"Percentile reference: {result.reference_snvs} missense SNVs")
 
 
-@app.command()
-def export(
+@app.command("export-proteins")
+def export_proteins(
     fasta: FastaOption,
     gff3: Gff3Option,
     output: Annotated[Path, typer.Option("--output", "-o", help="Output Parquet file.")],
@@ -241,7 +244,8 @@ def export(
     genetic_code: GeneticCodeOption = None,
     mito_genetic_code: MitoGeneticCodeOption = None,
 ) -> None:
-    """Write the wild-type-marginal scores of every coding transcript to a Parquet file."""
+    """Write the wild-type-marginal scores of every coding transcript to a Parquet file
+    (protein coordinates; `export` is the former name of this command)."""
     from omnimissense.export import export_scores
 
     result = export_scores(
@@ -258,6 +262,10 @@ def export(
     typer.echo(f"Transcripts:      {result.n_transcripts}")
     typer.echo(f"Unique proteins:  {result.n_unique_proteins} ({result.n_residues} residues)")
     typer.echo(f"Written to {output}")
+
+
+# former name, kept working (hidden from the help)
+app.command("export", hidden=True)(export_proteins)
 
 
 @app.command("export-variants")
