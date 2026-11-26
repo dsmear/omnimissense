@@ -1,3 +1,6 @@
+import re
+
+import pytest
 from typer.testing import CliRunner
 
 from omnimissense import __version__, environment
@@ -38,7 +41,8 @@ def test_check_torch_when_not_installed(monkeypatch) -> None:
     ]
 
 
-def test_proteome_command_writes_fasta(synthetic, tmp_path) -> None:
+@pytest.mark.parametrize("option", ["--annotation", "--gff3"])  # --gff3: the former name
+def test_proteome_command_writes_fasta(synthetic, tmp_path, option) -> None:
     output = tmp_path / "proteins.fa"
     result = runner.invoke(
         app,
@@ -46,7 +50,7 @@ def test_proteome_command_writes_fasta(synthetic, tmp_path) -> None:
             "proteome",
             "--fasta",
             str(synthetic.fasta),
-            "--gff3",
+            option,
             str(synthetic.gff3),
             "-o",
             str(output),
@@ -54,3 +58,17 @@ def test_proteome_command_writes_fasta(synthetic, tmp_path) -> None:
     )
     assert result.exit_code == 0, result.output
     assert output.read_text() == ">TXA\nMKRWLEHC\n>TXB\nMDPFGKWR\n"
+
+
+def _plain(text: str) -> str:
+    """Help text without colour codes (rich colours it when it detects CI or FORCE_COLOR)."""
+    return re.sub(r"\x1b\[[0-9;]*m", "", text)
+
+
+def test_export_is_a_hidden_alias_of_export_proteins() -> None:
+    commands = _plain(runner.invoke(app, ["--help"]).output)
+    assert "export-proteins" in commands and "export-variants" in commands
+    assert " export " not in commands.replace("│", " ")
+    alias = runner.invoke(app, ["export", "--help"])
+    assert alias.exit_code == 0
+    assert "Parquet" in _plain(alias.output) and "--annotation" in _plain(alias.output)

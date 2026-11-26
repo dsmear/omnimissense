@@ -48,3 +48,17 @@ def test_blosum62_is_the_standard_symmetric_matrix() -> None:
     assert all(BLOSUM62[a, b] == BLOSUM62[b, a] for a, b in BLOSUM62)
     assert (BLOSUM62["W", "W"], BLOSUM62["C", "C"], BLOSUM62["I", "V"]) == (11, 9, 3)
     assert (BLOSUM62["W", "D"], BLOSUM62["R", "K"], BLOSUM62["F", "Y"]) == (-4, 2, 3)
+
+
+def test_percentile_table() -> None:
+    from stats import percentile_table
+
+    pct = np.array([0.5, 3.0, 12.0, 60.0, 90.0, 95.0])
+    causal = np.array([True, True, True, False, False, False])
+    rows = percentile_table(pct, {"causal": causal, "common": ~causal, "none": causal & False},
+                            thresholds=(1, 5, 50))  # fmt: skip
+    assert rows == [
+        {"percentile_below": 1, "all_possible_missense": 0.01, "causal": 0.333, "common": 0.0},
+        {"percentile_below": 5, "all_possible_missense": 0.05, "causal": 0.667, "common": 0.0},
+        {"percentile_below": 50, "all_possible_missense": 0.5, "causal": 1.0, "common": 0.0},
+    ]

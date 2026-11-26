@@ -391,3 +391,67 @@ protein → writes them to the VCF `INFO` field.
 | Changelog tells upgraders to run `precompute` once | Percentiles need the reference; with scores already cached it takes about a minute for the dog. |
 | Release checks | `uv lock` changes only the version. `uv build`: 19 modules including `reference.py` and `snvs.py`; `twine check` passes for wheel and sdist; the wheel installed in a separate environment reports 0.4.0, `doctor` sees bcftools 1.24 (pysam 0.24.1), `proteome` gives *E. coli* 4,300 ok + 18 pseudogene (selenoproteins included) and yeast from the NCBI GTF 6,021 ok + 6 pseudogene, the benchmark numbers; this also exercises the csq-in-a-subprocess path from an installed package. 204 tests pass. |
 | Not tagged | Pushing `v0.4.0` publishes to PyPI: the user tags after the pull request is merged. |
+
+---
+
+## 2026-11-26 — Chicken benchmark: far from human (design)
+
+| Decision | Rationale |
+|---|---|
+| Species: chicken (*Gallus gallus*) | The OMIA species farthest from human with a usable number of missense variants and an Ensembl assembly (GRCg7b, Ensembl 116: 14,069 gene symbols, 14,048 canonical proteins translate). Chicken–human: > 300 million years; dog–human: ≈ 90. Same design as the dog benchmark, so the two read side by side. |
+| Common variants: EVA PRJEB78357, 96 Bangladeshi native chickens (3 varieties × improved/unimproved × 16), GRCg7b, autosomes, PASS SNVs; ALT frequency ≥ 5% from INFO/AC and AN (checked against the genotypes: 139 of 140 sampled sites agree within 0.01) | Same assembly as Ensembl 116 (no liftover). Village chickens of several varieties, closer to Dog10K's mix than a single breed. Alternatives checked: Ensembl 116 chicken VCF (no frequencies: EVA/dbSNP sites only), EVA PRJEB55239 (358 birds of one breed, Wenchang), PRJEB71347 (209 Chinese local chickens, 36 GB, unfiltered), GCRP (GRCg6a). EVA's accessioned VCFs are sites-only; the submitted 12 GB file has the INFO counts. |
+| Remote reads of the 12 GB VCF, sequence by sequence, with a local copy of the index (EVA names it `.vcf.csi`) | Only the coding sequence of ~600 genes is needed. From this container the egress proxy drops long range reads to ftp.ebi.ac.uk, so the extraction was tested on a local copy of the first 400 MB (chromosome 1 up to 30.4 Mb); on the user's machine the remote read is expected to work as for Dog10K. `--population-vcf` takes a local file. |
+| Human-ortholog comparison inside the same script (model on the human ortholog; AlphaMissense) | The question for a distant species is whether the human workaround still works: fewer genes map, and the aligned residue differs more often. The AUROC on all variants counts unmapped variants as least damaging, which favours the human methods (causal variants map more often than common ones; dog: 96% vs 41%); the subset scored by every method is the fair comparison. |
+| Dry run (tiny random model, mock OMIA and human files, real genome and the local population extract): every step runs; human scores equal the chicken scores when the mock human protein is the chicken protein | Real numbers need VESM (GPU, user's machine) and the real OMIA export (by hand: OMIA's robots.txt). The trait list is filled from that export. |
+
+## 2026-11-26 — Chicken benchmark: what OMIA holds, and mapping through RefSeq
+
+| Finding / decision | Rationale |
+|---|---|
+| OMIA export of 2026-11-26 (1,834 likely causal variants, all species): **chicken has 23 missense rows, 21 distinct variants, of which 4 are diseases** (analphalipoproteinaemia ABCA1 P; muscular dystrophy WWP1 and restricted ovulator VLDLR LP/P; trimethylaminuria FMO3); the others are plumage colour and pattern (MC1R ×4, EDNRB2 ×3, SLC45A2 ×2, CDKN2A ×2, MLPH, TYRP1), virus resistance (CD320, TNFRSF10B, MX1) and a blood group (MCAM). All other non-mammals together: about 50 missense variants over some 40 species (Japanese quail 4, rock pigeon 4, ball python 3, parrots, fish, frogs), mostly pigmentation. | Chicken is the only distant species with enough variants, and even there a disease-only AUROC is meaningless (n = 4). Main analysis: all 21 causal variants vs common variants; in the dog benchmark, OMIA trait variants scored like disease variants against common ones (AUROC 0.95–0.97), so "causal" is a fair positive class for a score of protein disruption. Caveat: some MC1R alleles (extended black) are gain of function. |
+| Map through the cited RefSeq protein, not by position | Matching OMIA's position on any Ensembl protein of the gene failed for 10 of 21 variants (and 3 matched only a non-canonical isoform): Ensembl's GRCg7b models often start upstream of RefSeq's (EDNRB2 +43, MLPH +67, FMO3 +121, CDKN2A +29 residues) or differ (CD320, TNFRSF10B). Aligning the RefSeq protein (fetched from NCBI by accession) to the Ensembl proteins maps all 21 (canonical transcript except where noted), each at a residue identical to OMIA's reference or alternative one. |
+| Restore the reference residue when GRCg7b carries the variant allele (4 variants: MC1R M71T and E92K, SLC45A2 L347M, CDKN2A R10C; RefSeq itself carries the variant for three of them, as OMIA notes) | The broiler reference genome is a domestic bird carrying trait alleles. Scoring the variant needs the ancestral residue in the sequence; the restored protein is scored like any other. Population variants at the same site are the reverse change and are removed from the negatives. |
+| Z chromosome | 5 of the 14 causal genes are Z-linked; the population VCF is autosomal, so they have no same-gene negatives (random-gene and all-common negatives are unaffected). |
+| Dry run on the real OMIA export (tiny random model, chromosome 1 population extract): mapping 21/21 distinct, every step runs | Real numbers need VESM on the user's GPU. |
+| Remote reads of the EVA VCF: one request per merged gene span (gaps < 20 kb), up to 4 sequences at a time, then a local filter to the CDS regions | The first version passed every CDS exon to `bcftools view -R`: about 5,900 separate range requests to EBI, which ran for over 10 minutes on chromosome 1 alone (810 exons) on the user's machine. Spans: 568 requests, ~9.3 Mb (~100 MB of the 12 GB file); identical SNVs on the local chromosome 1 extract (281 = 281). |
+
+---
+
+## 2026-11-26 — Public Python API
+
+| Decision | Rationale |
+|---|---|
+| A small public module (`omnimissense.api`, re-exported by the package): `Model`, `ProteinScores`, `annotate`, `precompute`, `AnnotatedVariant(s)`, `VariantStatus`, `PrecomputeResult`, `ReferenceMismatchError`, `AMINO_ACIDS`; declared stable in *Compatibility*. Everything else stays internal. | Before, using omnimissense from code meant internal plumbing (a `ScoreCache`, a scorer factory, the model name three times, mandatory output files) and unlabelled `L × 20` matrices. The CLI is unchanged. |
+| `AnnotatedVariant` fields = the TSV columns, same names and order, plus `protein_change` and `record_index`; internal details (`seq_hash`, `alt_index`, the nested csq `Consequence`) are not exposed | One vocabulary for the command line and the code; the TSV is already a stability promise. |
+| `Model` loads the weights lazily (first score not in the cache) | A fully cached genome needs no GPU, as with the CLI; creating a `Model` is free. |
+| Tables: `to_arrow()` always, `to_pandas()` with the optional extra `omnimissense[pandas]` (imported on call, clear error otherwise) | pyarrow is already a dependency (the cache); pandas is not installed today, even indirectly, and could clash with a user's pinned version. |
+| `import omnimissense` imports the API on first attribute access (PEP 562) | The CLI keeps starting without torch (checked by a test). |
+| `pipeline.annotate` takes `output_vcf` / `output_tsv` as optional | The API returns objects; files are written only when asked. The annotated VCF needs csq's temporary output, so it is written during the call (`output_vcf=`), not afterwards. |
+
+## 2026-11-26 — Chicken benchmark: results (VESM 650M, user's machine)
+
+| Finding | Numbers |
+|---|---|
+| Chicken proteome `precompute` (RTX 3070, VESM 650M fp16) | 44,876 coding transcripts, 42,089 unique proteins, 27.6 M residues in 49 min (9,384 residues/s); percentile reference 65,423,227 values (16,986 canonical transcripts) |
+| Benchmark run | 21 causal variants mapped (4 with the ancestral residue restored); common: 54 in the 14 causal genes + 1,763 in 499 random genes; 5 common variants at causal sites removed |
+| Main AUROC, all causal vs all common | VESM chicken wild-type 0.922 (0.868–0.966); VESM human ortholog 0.830; AlphaMissense 0.821 (0.715–0.919); VESM masked 0.793; BLOSUM62 0.564. Paired: chicken − AlphaMissense +0.101 (+0.005 to +0.204); chicken − human protein +0.092 (−0.006 to +0.198) |
+| Scored by every method (16 / 416) | VESM chicken 0.888, human 0.870, AlphaMissense 0.815; differences not significant |
+| By set | Traits (17): chicken 0.916 vs AlphaMissense 0.781 (+0.127 on the 12 both score, +0.045 to +0.227). Diseases (4): chicken 0.949 vs AlphaMissense 0.995 (−0.046, −0.086 to −0.006): too few to generalise |
+| Human mappability | causal 76% (EDNRB2 ×3 has no mammalian ortholog; chicken CDKN2A = ARF only, UniProt's human CDKN2A is p16), common 23% (dog: 96% / 41%) |
+| Percentiles | proteome-wide median: causal 35.6, common 82.0; below 5th: causal 9.5%, common 0%. In-protein median: causal 0.40, common 0.89 |
+| Masked marginal | worse than wild-type (0.79 vs 0.92, pathogenic 3: 0.51 with a 0.02–1.00 interval); not investigated per variant (the masked mode is not the default); dog showed the same direction (0.948 vs 0.977) |
+
+---
+
+## 2026-11-26 — Release 0.5.0 (prepared; not tagged)
+
+| Decision | Rationale |
+|---|---|
+| `--annotation` replaces `--gff3` (GFF3 or GTF), `--gff3` kept as an alias; `export-proteins` replaces `export`, kept as a hidden alias | Names reviewed before the 1.0 freeze: `--gff3` was misleading since GTF support (0.4.0) and `export` was easy to confuse with `export-variants`. Old names keep working, as the Compatibility rules require. The Python API (new, unreleased until now) uses `annotation=` from the start. Other options unchanged: the opposite defaults of `export-proteins` (all transcripts) and `export-variants` (canonical only) follow the output sizes. |
+| Masked-marginal anomaly in the chicken benchmark not investigated before the release | `masked_marginals` re-read: window weights sum to 1, LLR against the wild-type residue; nothing wrong found. VESM is trained on unmasked LLR targets and its authors score with the wild-type marginal; the default is unchanged. To check per variant before 1.0. |
+| Percentile threshold tables in the benchmarks (`*.percentiles.tsv`): share of causal and common variants below the 1st, 5th, 10th, 20th, 30th and 50th proteome-wide percentile | A guide to reading `OMS_WT_PCT`; the dog needs `precompute` on the GSD assembly (the Dog10K one), the chicken uses the reference already built. |
+| Release checks | `uv lock` changes only the version; `uv build`: 20 modules including `api.py`; `twine check` passes for wheel and sdist; metadata has the `pandas` extra. In a fresh environment (`omnimissense[pandas]`, Python 3.13): `--version` 0.5.0, `doctor` sees bcftools 1.24; `proteome` with the old `--gff3` on *E. coli* gives 4,300 ok + 18 pseudogene, with `--annotation` on the yeast GTF 6,021 ok + 6 pseudogene; `export` is hidden from the help; the Python API (tiny model) scores a protein, runs `precompute` and `annotate` with percentiles and `to_pandas()`. 235 tests pass. |
+| Not tagged | Pushing `v0.5.0` publishes to PyPI: the user tags after the pull request is merged. |
+
+| Chicken percentile table (re-run with the 0.5.0 script, identical AUROCs) | Below the 5th / 10th / 20th / 30th / 50th proteome-wide percentile: causal 9.5% / 28.6% / 42.9% / 47.6% / 66.7%, common 0% / 0.1% / 0.6% / 1.6% / 8.1%. In the README's Output section as a guide to reading `OMS_WT_PCT`; the dog column needs `precompute` on the GSD assembly. |
+| Dog percentile table (user's machine: `precompute` on UU_Cfam_GSD_1.0, then `dog_omia.py`; AUROCs identical to before) | Below the 5th / 10th / 20th / 30th / 50th proteome-wide percentile: pathogenic (49) 16.3% / 40.8% / 63.3% / 77.6% / 89.8%, disease (118) 14.4% / 32.2% / 55.9% / 73.7% / 88.1%, traits (15) 6.7% / 26.7% / 66.7% / 80.0% / 93.3%, common (521) 0% / 0% / 0% / 2.3% / 9.4%. Medians: pathogenic 12.1, disease 16.0, common 82.2 (chicken common 82.0). README table now has both species. |

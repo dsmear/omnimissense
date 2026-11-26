@@ -8,16 +8,17 @@
 ```bash
 pip install omnimissense        # or: uv tool install omnimissense
 omnimissense doctor             # checks bcftools (bundled), PyTorch, CUDA
-omnimissense annotate --vcf my.vcf.gz --fasta genome.fa.gz --gff3 genes.gff3.gz -o my.oms.vcf.gz
+omnimissense annotate --vcf my.vcf.gz --fasta genome.fa.gz --annotation genes.gff3.gz -o my.oms.vcf.gz
 ```
 
 Python ≥ 3.11; a CUDA GPU is strongly recommended (CPU works but is slow). bcftools is bundled
-through pysam: nothing else to install. Full example: [Quick start](#quick-start-dog).
+through pysam: nothing else to install. Full example: [Quick start](#quick-start-dog); from
+Python code: [Python API](#python-api).
 
 > **Status: alpha.** The pipeline works end to end on Ensembl and NCBI annotations (dog, yeast,
 > *E. coli*: proteomes identical to the reference translations), reproduces published ESM-2
-> results and separates known dog disease variants from common dog variants (see
-> [Validation](#validation)).
+> results and separates known causal variants from common variants in dog and in chicken, a
+> species more than 300 million years from human (see [Validation](#validation)).
 > The scores measure how disruptive a substitution looks to the protein, **not** whether it
 > causes disease: do not use them alone for breeding or clinical decisions.
 
@@ -86,16 +87,16 @@ FASTA=data/dog/Canis_lupus_familiaris.ROS_Cfam_1.0.dna.toplevel.fa.gz
 GFF3=data/dog/Canis_lupus_familiaris.ROS_Cfam_1.0.116.gff3.gz
 
 # optional, once: score the whole proteome into the cache (default model: VESM 650M)
-omnimissense precompute --fasta $FASTA --gff3 $GFF3
+omnimissense precompute --fasta $FASTA --annotation $GFF3
 
-omnimissense annotate --vcf my_dogs.vcf.gz --fasta $FASTA --gff3 $GFF3 \
+omnimissense annotate --vcf my_dogs.vcf.gz --fasta $FASTA --annotation $GFF3 \
     -o my_dogs.omnimissense.vcf.gz          # also writes my_dogs.omnimissense.tsv
 
 # optional: all scores of all coding transcripts in one Parquet file
-omnimissense export --fasta $FASTA --gff3 $GFF3 -o dog_scores.parquet
+omnimissense export-proteins --fasta $FASTA --annotation $GFF3 -o dog_scores.parquet
 
 # optional: every possible missense SNV at genome coordinates (no GPU needed afterwards)
-omnimissense export-variants --fasta $FASTA --gff3 $GFF3 -o dog_snvs.vcf.gz
+omnimissense export-variants --fasta $FASTA --annotation $GFF3 -o dog_snvs.vcf.gz
 ```
 
 The plain-gzip FASTA distributed by Ensembl is recompressed once to BGZF (`.fa.bgz`) next to
@@ -161,7 +162,7 @@ vertebrate mitochondria (3 yeast, 5 invertebrates) or `--genetic-code 6` for cil
 |---|---|---|---|
 | Dog | ROS_Cfam_1.0, Ensembl 116 (43,524 coding transcripts) | VESM 650M, wild-type marginal | [DavideMacchia/omnimissense-dog-ros-cfam-1.0-vesm-650m](https://huggingface.co/datasets/DavideMacchia/omnimissense-dog-ros-cfam-1.0-vesm-650m) (Parquet, 1.55 GB, CC-BY-4.0) |
 
-Produced with `omnimissense precompute` + `omnimissense export`; the dataset card documents the
+Produced with `omnimissense precompute` + `omnimissense export` (now `export-proteins`); the dataset card documents the
 schema, provenance and limitations.
 
 ## Output
@@ -192,10 +193,72 @@ percentile within each protein was considered and rejected: it discards what sep
 genes (dog pathogenic variants sit at a median 34th percentile of their own protein, while
 the raw score separates them from common variants with AUROC 0.977).
 
+**Reading the percentile.** Share of variants below each percentile in the dog and chicken
+benchmarks (VESM 650M; [Validation](#validation)):
+
+| `OMS_WT_PCT` below | all possible missense changes | dog pathogenic (49) | dog disease (118) | dog common (521) | chicken causal (21) | chicken common (1,817) |
+|---|---|---|---|---|---|---|
+| 5 | 5% | 16% | 14% | 0% | 10% | 0% |
+| 10 | 10% | 41% | 32% | 0% | 29% | 0.1% |
+| 20 | 20% | 63% | 56% | 0% | 43% | 0.6% |
+| 30 | 30% | 78% | 74% | 2.3% | 48% | 1.6% |
+| 50 | 50% | 90% | 88% | 9.4% | 67% | 8.1% |
+
+Median percentile: dog pathogenic 12, dog disease 16, chicken causal 36 (mostly trait
+variants), common variants 82 in both species. Damaging variants need not be extreme: three
+quarters of the dog pathogenic variants are below the 30th percentile, where about 2% of
+common variants fall. Common variants are an easy negative set (selection has removed
+damaging alleles from high frequency): rare harmless variants score lower on average, so a
+threshold flags more of them than this table suggests. Use the percentile to rank, not as a
+verdict.
+
 **Status values:** `ok`, `ref_aa_mismatch` (csq and the translated protein disagree),
 `multi_aa_change` (the change alters the protein length), `nonstandard_aa`, `protein_unavailable`
 (e.g. internal stop codon), `mitochondrial_skipped` (see limitations), `pseudogene` (CDS
 flagged `pseudo=true` by NCBI: a disrupted gene). Only `ok` rows are scored.
+
+## Python API
+
+```python
+import omnimissense as om
+
+model = om.Model()  # VESM 650M; the weights load on first use (GPU if any)
+
+# one protein: every substitution, wild-type marginal (one forward pass)
+scores = model.score_protein("MKTAYIAKQRQISFVKSHFSRQ")
+scores["Y5D"]  # -> float; also "p.Y5D", "p.(Tyr5Asp)"
+scores.to_pandas()  # position, ref_aa, alt_aa, change, wt_marginal
+
+# a VCF, as `omnimissense annotate` does
+result = om.annotate("calls.vcf.gz", fasta="genome.fa.gz", annotation="genes.gff3.gz", model=model)
+for v in result:  # one AnnotatedVariant per ALT allele and transcript
+    if v.is_scored:
+        print(v.gene, v.transcript, v.protein_change, v.wt_marginal, v.wt_percentile)
+result.to_arrow()  # or .to_pandas(), .write_tsv(path)
+
+om.precompute("genome.fa.gz", "genes.gff3.gz", model=model)  # cache + percentile reference
+```
+
+- **Scores** are log-likelihood ratios (natural log) of the alternative vs the reference
+  amino acid: 0 = as likely as the reference, negative = less likely (more damaging).
+  `ProteinScores.llr` is the `L × 20` matrix (columns in `om.AMINO_ACIDS` order, row `i` =
+  position `i + 1`); `scores["Y5D"]` checks the reference residue.
+  `model.score_protein(seq, masked=True, positions=[...])` gives masked marginals (one pass
+  per position); `model.score_proteins([...])` scores many proteins in one batch.
+- **`AnnotatedVariant`** has the TSV columns as fields (same names, same order), plus
+  `protein_change` (`"R106W"`; `"W4C+L5M"` for a change over two codons) and
+  `record_index` (0-based record of the input VCF). Scores are `None` unless
+  `status == "ok"`; `wt_percentile` is `None` until `precompute` was run once for the genome.
+  `om.annotate(..., output_vcf=..., output_tsv=...)` also writes the files the command line
+  writes.
+- **Cache.** Every score is cached on disk per model (`cache_dir=`, default
+  `$OMNIMISSENSE_CACHE` or `~/.cache/omnimissense`, shared with the command line), so a
+  genome scored once never needs the GPU again.
+- **DataFrames:** `to_arrow()` needs nothing more (pyarrow is a dependency; polars:
+  `pl.from_arrow(...)`); `to_pandas()` needs pandas: `pip install 'omnimissense[pandas]'`.
+- `om.Model.from_scorer(scorer, name=...)` wraps a model you loaded yourself
+  (`omnimissense.scoring.MaskedLMScorer`). `import omnimissense` stays light: torch loads
+  only when the API is first used.
 
 ## Performance (RTX 3070, 8 GB)
 
@@ -369,6 +432,49 @@ What this says:
   benign, so for ranking they cost the workaround little in the dog, a species close to
   human. omnimissense scores 100% of them, which should matter more in species far from human.
 
+**Chicken: far from human** (`benchmarks/chicken_omia.py`). Chicken and human last shared an
+ancestor more than 300 million years ago (dog: about 90). OMIA chicken missense variants,
+located on the RefSeq protein OMIA cites and carried to the Ensembl 116 GRCg7b protein by
+alignment (21 distinct variants: 4 diseases, 17 traits such as plumage colour, virus
+resistance and a blood group), against EVA missense variants with allele frequency ≥ 5% among
+96 Bangladeshi native chickens. VESM 650M; AUROC with 95% bootstrap interval.
+
+| causal set | common variants | n causal / common | **VESM, chicken protein** | VESM, human ortholog | AlphaMissense (human) | VESM masked | BLOSUM62 |
+|---|---|---|---|---|---|---|---|
+| all causal | all | 21 / 1,817 | **0.922** (0.868–0.966) | 0.830 (0.720–0.926) | 0.821 (0.715–0.919) | 0.793 | 0.564 |
+| all causal, scored by every method | all | 16 / 416 | **0.888** (0.802–0.953) | 0.870 (0.771–0.944) | 0.815 (0.676–0.923) | 0.743 | 0.535 |
+| all causal | same genes | 21 / 54 | **0.886** (0.804–0.950) | 0.822 | 0.821 | 0.772 | 0.520 |
+| traits | all | 17 / 1,817 | **0.916** (0.858–0.967) | 0.798 | 0.781 (0.649–0.898) | 0.831 | 0.610 |
+| diseases | all | 4 / 1,817 | 0.949 (0.910–0.987) | 0.969 | **0.995** (0.987–0.999) | 0.634 | 0.367 |
+
+What this says:
+
+- **The score holds far from human.** VESM on the chicken protein separates the causal
+  variants from common chicken variants with AUROC 0.92 (dog: 0.977 pathogenic, 0.946 traits),
+  0.89 within the same genes; amino-acid similarity alone is near chance (0.56).
+- **The human workaround loses coverage.** It cannot score 5 of the 21 causal variants
+  (EDNRB2, 3 variants: the gene does not exist in mammals; chicken CDKN2A encodes only ARF)
+  nor 77% of the common ones (the human residue differs at variable sites). On all
+  variants VESM on the chicken protein beats AlphaMissense: +0.10 (paired interval +0.005 to
+  +0.20). On the 16 variants every method scores the differences are not significant (VESM
+  chicken − AlphaMissense +0.07, −0.005 to +0.16; chicken − human protein +0.02, −0.001 to
+  +0.04).
+- **By set:** on the traits VESM on the chicken protein is ahead of AlphaMissense also on the
+  variants both score (+0.13, +0.05 to +0.23); on the 4 disease variants AlphaMissense is
+  ahead (0.995 vs 0.949), too few to generalise, in genes conserved enough for the human
+  mapping to work.
+- **Percentiles** (`OMS_WT_PCT`, after `precompute` on the chicken genome): causal variants
+  have a median proteome-wide percentile of 36, common variants 82; 10% of the causal
+  variants and none of the common ones are below the 5th percentile. A damaging variant does
+  not need an extreme percentile.
+- The masked marginal is clearly worse than the wild-type marginal here (0.79 vs 0.92; dog
+  0.948 vs 0.977): the default stays the wild-type marginal.
+- **Caveats:** 21 variants, mostly traits, some of them gain of function (MC1R extended
+  black); bootstrap intervals from so few causal variants are optimistic; OMIA ascertainment
+  bias as in the dog; Z-linked causal genes (5 of 14) have no same-gene negatives (the
+  population VCF is autosomal); in 4 variants the broiler reference genome carries the
+  variant allele and the ancestral residue was restored before scoring.
+
 ## Limitations
 
 - The annotation must describe genes and CDS: Ensembl, NCBI RefSeq, Prokka and Bakta GFF3
@@ -406,24 +512,30 @@ guarantees.
 **Kept stable across 0.x versions** (a change needs a deprecation note in the changelog and a
 new minor version):
 
-- command names and their options: `annotate`, `precompute`, `export`, `export-variants`,
-  `proteome`, `doctor`;
+- command names and their options: `annotate`, `precompute`, `export-proteins` (formerly
+  `export`, still accepted), `export-variants`, `proteome`, `doctor`; `--annotation` was
+  called `--gff3` before 0.5.0 and that name keeps working;
 - VCF `INFO` tags (`OMS`, `OMS_WT`, `OMS_WT_PCT`, `OMS_MM`, `OMS_REF_MISMATCH`) and the order
   of the 10 fields of an `OMS` entry; new information comes as new tags;
 - TSV columns of `annotate` and `export-variants`: append-only (new columns at the end,
   existing names and positions unchanged);
 - status values keep their meaning (new ones can be added);
 - the definition of the scores (log-likelihood ratios, wild-type and masked marginals, the
-  long-protein windows).
+  long-protein windows);
+- the Python API: the names exported by `omnimissense` (`Model`, `ProteinScores`,
+  `annotate`, `precompute`, `AnnotatedVariant`, `AnnotatedVariants`, `VariantStatus`,
+  `PrecomputeResult`, `ReferenceMismatchError`, `AMINO_ACIDS`), their parameters, fields and
+  methods (new ones can be added, with defaults).
 
-**Not stable:** the Python API (modules and functions are internal), log messages, and the
+**Not stable:** the other modules (`omnimissense.pipeline`, `omnimissense.scoring`, … are
+internal), log messages, and the
 on-disk cache layout. The cache is versioned (`<cache>/v1/…`): a change in how scores are
 computed bumps the version, so an old cache is recomputed, never misread. The percentile
 reference is keyed by the annotation, genome and genetic codes.
 
 **Reproducibility.** Scores depend on the model (with its pinned revision), the genome, the
 annotation, the genetic codes and the omnimissense version; output VCFs record the version and
-the model (`##omnimissenseVersion`, `##omnimissenseModel`), `export` files all of them.
+the model (`##omnimissenseVersion`, `##omnimissenseModel`), `export-proteins` files all of them.
 `pysam` is pinned to the 0.24 series (bcftools 1.24), because omnimissense relies on bcftools
 csq's genetic-code tables and `--dump-gff` format; the pin moves only after the test suite
 passes on a new version.

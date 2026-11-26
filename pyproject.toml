@@ -1,6 +1,6 @@
 [project]
 name = "omnimissense"
-version = "0.4.0"
+version = "0.5.0"
 description = "Score missense variants in any species with protein language models, straight from a VCF."
 readme = "README.md"
 license = "MIT"
@@ -33,6 +33,10 @@ dependencies = [
     "typer>=0.29",
 ]
 
+[project.optional-dependencies]
+# DataFrame output of the Python API (to_pandas); to_arrow() needs nothing more
+pandas = ["pandas>=2.2"]
+
 [project.urls]
 Homepage = "https://github.com/dsmear/omnimissense"
 Repository = "https://github.com/dsmear/omnimissense"
@@ -46,6 +50,7 @@ benchmarks = [
     "biopython>=1.84",
 ]
 dev = [
+    "pandas>=2.2",
     "pre-commit>=4.7",
     "pytest>=9.2",
     "ruff>=0.17.6",

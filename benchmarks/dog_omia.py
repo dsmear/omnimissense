@@ -27,6 +27,7 @@ import logging
 import random
 import re
 import sys
+import tempfile
 import time
 import urllib.request
 from collections import defaultdict
@@ -41,12 +42,12 @@ import pysam.utils
 sys.path.insert(0, str(Path(__file__).parent))
 from blosum import BLOSUM62
 from models import model_tag
-from stats import auroc, bootstrap_ci
+from stats import auroc, bootstrap_ci, percentile_table
 
 from omnimissense.cache import ScoreCache, default_cache_dir
 from omnimissense.defaults import DEFAULT_MODEL
 from omnimissense.fasta import prepare_fasta
-from omnimissense.gff import Transcript, read_transcripts
+from omnimissense.gff import Transcript, prepare_annotation, read_transcripts
 from omnimissense.pipeline import (
     LazyScorer,
     VariantStatus,
@@ -55,6 +56,8 @@ from omnimissense.pipeline import (
     cached_wt_scores,
 )
 from omnimissense.proteome import Protein, ProteinStatus, build_proteome
+from omnimissense.reference import load_reference as load_percentile_reference
+from omnimissense.reference import reference_key
 from omnimissense.scoring import MaskedLMScorer
 from omnimissense.sequences import AA_INDEX, sequence_hash
 
@@ -143,15 +146,21 @@ EXCLUDED = {"Modifier of copper toxicosis"}
 PATHOGENIC_CLASSES = {"P", "LP", "LP/P"}
 
 
-def read_omia(path: Path) -> list[dict[str, str]]:
-    """Dog missense records of the OMIA variant CSV, with a ``category``.
+def read_omia(
+    path: Path,
+    species: str = "dog",
+    traits: set[str] = TRAITS,
+    excluded: set[str] = EXCLUDED,
+) -> list[dict[str, str]]:
+    """Missense records of one species in the OMIA variant CSV, with a ``category``.
 
-    Categories: ``pathogenic`` (AVCG P/LP), ``disease_unclassified``, ``trait``.
+    Categories: ``pathogenic`` (AVCG P/LP), ``disease_unclassified``, ``trait`` (phenotypes
+    listed in ``traits``); phenotypes in ``excluded`` are left out.
     """
     records = []
     with path.open(newline="", encoding="utf-8-sig") as handle:
         for row in csv.DictReader(handle):
-            if row["Species Name"].strip() != "dog":
+            if row["Species Name"].strip() != species:
                 continue
             if row["Variant Effect"].strip() != "missense":
                 continue
@@ -159,9 +168,9 @@ def read_omia(path: Path) -> list[dict[str, str]]:
             classification = row["Pathogenicity Classification"].strip()
             if classification in PATHOGENIC_CLASSES:
                 category = "pathogenic"
-            elif classification == "Not currently evaluated" and phenotype in TRAITS:
+            elif classification == "Not currently evaluated" and phenotype in traits:
                 category = "trait"
-            elif classification == "Not currently evaluated" and phenotype not in EXCLUDED:
+            elif classification == "Not currently evaluated" and phenotype not in excluded:
                 category = "disease_unclassified"
             else:
                 continue
@@ -482,6 +491,14 @@ def main() -> int:
                     not_wt[pos, AA_INDEX[aa]] = False
             in_protein[i] = float((matrix[not_wt] < wm[i]).mean())
 
+    # proteome-wide percentile (omnimissense precompute on the GSD FASTA and GFF3), if built
+    with tempfile.TemporaryDirectory(prefix="dog-omia-") as tmp:
+        codes = prepare_annotation(gff3, Path(tmp)).codes
+    reference = load_percentile_reference(cache.directory, reference_key(gff3, fasta, codes))
+    proteome_pct = reference.percentile(wm) if reference is not None else None
+    if reference is None:
+        log.info("No percentile reference: run omnimissense precompute on the GSD files")
+
     common = labels == 0
     causal_sets = {
         "pathogenic": categories == "pathogenic",
@@ -538,6 +555,20 @@ def main() -> int:
         )
         writer.writeheader()
         writer.writerows(rows)
+    if proteome_pct is not None:
+        for name, selection in (*causal_sets.items(), ("common", common)):
+            values = proteome_pct[selection]
+            summary[f"proteome_percentile_median_{name}"] = round(float(np.median(values)), 2)
+            summary[f"proteome_percentile_below5_{name}"] = round(float((values < 5).mean()), 3)
+        thresholds = percentile_table(
+            proteome_pct, {**{f"causal_{k}": v for k, v in causal_sets.items()}, "common": common}
+        )
+        with args.output.with_suffix(".percentiles.tsv").open("w", newline="") as handle:
+            writer = csv.DictWriter(
+                handle, fieldnames=list(thresholds[0]), delimiter="\t", lineterminator="\n"
+            )
+            writer.writeheader()
+            writer.writerows(thresholds)
     with args.output.with_suffix(".summary.tsv").open("w") as handle:
         handle.writelines(f"{k}\t{v}\n" for k, v in summary.items())
 
