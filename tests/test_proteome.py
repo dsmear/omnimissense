@@ -13,20 +13,23 @@ from omnimissense.proteome import (
 )
 
 
-def _transcript(strand: str, cds: list[tuple[int, int, int]], seqid: str = "1") -> Transcript:
+def _transcript(
+    strand: str, cds: list[tuple[int, int, int]], seqid: str = "1", genetic_code: int | None = 1
+) -> Transcript:
     return Transcript(
         transcript_id="T",
         gene_id="G",
         seqid=seqid,
         strand=strand,
         biotype="protein_coding",
+        genetic_code=genetic_code,
         cds=[CdsSegment(*c) for c in cds],
     )
 
 
 def test_both_strands_and_intron_split_codons_translate_to_designed_proteins(synthetic) -> None:
     fasta = prepare_fasta(synthetic.fasta)
-    proteins = build_proteome(fasta, read_transcripts(synthetic.gff3))
+    proteins = build_proteome(fasta, read_transcripts(synthetic.gff3, fasta))
     assert proteins["TXA"].sequence == PROTEIN_A
     assert proteins["TXB"].sequence == PROTEIN_B
     assert {p.status for p in proteins.values()} == {ProteinStatus.OK}
@@ -53,6 +56,37 @@ def test_alternative_start_codon_is_translated_as_methionine(tmp_path) -> None:
         assert translate_transcript(fasta, incomplete).sequence == "LKL"
 
 
+def test_genetic_code_of_the_transcript_is_used(tmp_path) -> None:
+    genome = tmp_path / "codes.fa"
+    genome.write_text(">1\nATAAAATGACTTAGG\n")  # CDS 1..12 = ATA AAA TGA CTT
+    with pysam.FastaFile(str(prepare_fasta(genome))) as fasta:
+        standard = translate_transcript(fasta, _transcript("+", [(1, 12, 0)]))
+        assert (standard.sequence, standard.status) == ("IK*L", ProteinStatus.INTERNAL_STOP)
+        # Yeast mitochondrial code: ATA = M (also a start), TGA = W, CTN = T.
+        yeast_mt = translate_transcript(fasta, _transcript("+", [(1, 12, 0)], genetic_code=3))
+        assert (yeast_mt.sequence, yeast_mt.status) == ("MKWT", ProteinStatus.OK)
+        # Vertebrate mitochondrial code: ATA = M, TGA = W, CTT = L.
+        vert_mt = translate_transcript(fasta, _transcript("+", [(1, 12, 0)], genetic_code=2))
+        assert vert_mt.sequence == "MKWL"
+
+
+def test_terminal_stop_that_also_codes_for_an_amino_acid_is_removed(tmp_path) -> None:
+    genome = tmp_path / "taa.fa"
+    genome.write_text(">1\nATGTAAAAATAA\n")  # Condylostoma (28): TAA = Q, or stop at the end
+    with pysam.FastaFile(str(prepare_fasta(genome))) as fasta:
+        protein = translate_transcript(fasta, _transcript("+", [(1, 12, 0)], genetic_code=28))
+        assert (protein.sequence, protein.status) == ("MQK", ProteinStatus.OK)
+
+
+def test_initiation_codons_depend_on_the_genetic_code(tmp_path) -> None:
+    genome = tmp_path / "gtg.fa"
+    genome.write_text(">1\nGTGAAATAA\n")  # GTG: start in tables 2 and 11, not in table 1
+    with pysam.FastaFile(str(prepare_fasta(genome))) as fasta:
+        assert translate_transcript(fasta, _transcript("+", [(1, 9, 0)])).sequence == "VK"
+        bacterial = _transcript("+", [(1, 9, 0)], genetic_code=11)
+        assert translate_transcript(fasta, bacterial).sequence == "MK"
+
+
 def test_wrong_frame_is_reported_as_internal_stop(synthetic) -> None:
     fasta = prepare_fasta(synthetic.fasta)
     with pysam.FastaFile(str(fasta)) as genome:
@@ -64,7 +98,7 @@ def test_wrong_frame_is_reported_as_internal_stop(synthetic) -> None:
 def test_mitochondrial_and_noncoding_transcripts_are_skipped(synthetic) -> None:
     fasta = prepare_fasta(synthetic.fasta)
     with pysam.FastaFile(str(fasta)) as genome:
-        mito = _transcript("+", [(41, 47, 0)], seqid="MT")
+        mito = _transcript("+", [(41, 47, 0)], seqid="1", genetic_code=None)
         assert translate_transcript(genome, mito).status is ProteinStatus.MITOCHONDRIAL
         assert translate_transcript(genome, _transcript("+", [])).status is ProteinStatus.NO_CDS
 
@@ -81,7 +115,29 @@ def test_plain_gzip_fasta_is_converted_to_bgzf(synthetic, tmp_path) -> None:
 
 
 def test_write_fasta_skips_invalid_proteins(synthetic, tmp_path) -> None:
-    proteins = build_proteome(prepare_fasta(synthetic.fasta), read_transcripts(synthetic.gff3))
+    fasta = prepare_fasta(synthetic.fasta)
+    proteins = build_proteome(fasta, read_transcripts(synthetic.gff3, fasta))
     output = tmp_path / "out.fa"
     assert write_fasta(proteins.values(), output) == 2
     assert output.read_text().startswith(">TXA\nMKRWLEHC\n")
+
+
+def test_incomplete_5prime_from_the_gff3_survives_csq_trimming(tmp_path) -> None:
+    # csq's dump trims a 5' partial codon and resets the phase to 0; the transcript must
+    # still be known as 5'-incomplete, so its first codon (CTG) is not read as a start.
+    genome = tmp_path / "partial.fa"
+    genome.write_text(">1\nGGCTGAAACTGTAAGG\n")  # CDS 1..14 with phase 2 -> CTG AAA CTG TAA
+    gff3 = tmp_path / "partial.gff3"
+    rows = [
+        ("gene", ".", "ID=gene:G;biotype=protein_coding"),
+        ("mRNA", ".", "ID=transcript:T;Parent=gene:G;biotype=protein_coding"),
+        ("CDS", "2", "Parent=transcript:T"),
+    ]
+    gff3.write_text(
+        "".join("\t".join(["1", "t", f, "1", "14", ".", "+", p, a]) + "\n" for f, p, a in rows)
+    )
+    fasta = prepare_fasta(genome)
+    transcripts = read_transcripts(gff3, fasta)
+    assert transcripts["T"].cds_in_transcript_order()[0].phase == 0  # as csq wrote it
+    assert transcripts["T"].incomplete_5prime and not transcripts["T"].complete_5prime
+    assert build_proteome(fasta, transcripts)["T"].sequence == "LKL"

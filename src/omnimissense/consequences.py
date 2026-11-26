@@ -6,6 +6,7 @@ bcftools is used through the copy bundled in pysam, so no external installation 
 from __future__ import annotations
 
 import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -13,8 +14,19 @@ import pysam
 import pysam.bcftools
 import pysam.utils
 
+from omnimissense.genetic_code import STANDARD
+from omnimissense.genetic_code import genetic_code as check_genetic_code
+
 _AA_CHANGE = re.compile(r"^(?P<pos>\d+)(?P<ref>[A-Z*]+)>(?P<alt_pos>\d+)(?P<alt>[A-Z*]+)$")
 _DNA_CHANGE = re.compile(r"^(?P<pos>\d+)(?P<ref>[A-Za-z]+)>(?P<alt>[A-Za-z]+)$")
+
+_UNUSABLE_GFF_HINT = (
+    "bcftools csq found no usable transcripts in the GFF3. It reads GFF3 with genes, "
+    "transcripts and CDS (Ensembl, NCBI RefSeq; omnimissense also accepts CDS directly under "
+    "genes, as in prokaryotic files). Other layouts must be converted first: GTF to GFF3 with "
+    "e.g. AGAT or gffread; bcftools' misc/gff2gff fills in IDs and biotypes from "
+    "GENCODE-style attributes."
+)
 
 
 class CsqError(RuntimeError):
@@ -73,23 +85,55 @@ def parse_bcsq(entry: str) -> Consequence | None:
     )
 
 
-def run_csq(vcf: Path, fasta: Path, gff3: Path, output: Path, threads: int = 0) -> str:
+def run_csq(
+    vcf: Path,
+    fasta: Path,
+    gff3: Path,
+    output: Path,
+    threads: int = 0,
+    dump_gff: Path | None = None,
+    genetic_code: int = STANDARD,
+) -> str:
     """Annotate ``vcf`` with INFO/BCSQ; writes uncompressed BCF if ``output`` ends in .bcf,
     otherwise BGZF-compressed VCF.
 
     Runs in local mode (``-l``: one record at a time, no phasing needed) on all ALT alleles
-    regardless of genotypes (``-s -``); sample columns are kept unchanged.
-    Returns bcftools' log messages.
+    regardless of genotypes (``-s -``); sample columns are kept unchanged. With ``dump_gff``,
+    the annotation as csq parsed it is also written there (gzip GFF3, ``--dump-gff``).
+    ``genetic_code`` is an NCBI table (``-C``); for the standard code csq keeps its default
+    (table 0: the standard codons, ATG as the only start). Returns bcftools' log messages.
     """
     output_type = "-Ou" if output.suffix == ".bcf" else "-Oz"
     args = ["-f", str(fasta), "-g", str(gff3), "-l", "-s", "-", output_type, "-o", str(output)]
     if threads:
         args += ["--threads", str(threads)]
+    if dump_gff is not None:
+        args += ["--dump-gff", str(dump_gff)]
+    if genetic_code != STANDARD:
+        check_genetic_code(genetic_code)  # csq silently keeps the previous table on bad IDs
+        args += ["-C", str(genetic_code)]
     try:
         pysam.bcftools.csq(*args, str(vcf), catch_stdout=False)
     except pysam.utils.SamtoolsError as exc:
+        if "No usable transcripts" in str(exc):
+            raise CsqError(f"{_UNUSABLE_GFF_HINT}\nbcftools csq said: {exc}") from exc
         raise CsqError(f"bcftools csq failed: {exc}") from exc
     return pysam.bcftools.csq.get_messages()
+
+
+def dump_annotation(fasta: Path, gff3: Path, output: Path) -> None:
+    """Write the annotation as bcftools csq parses it (``--dump-gff``) to ``output`` (gzip).
+
+    csq is run on an empty VCF, so nothing is called. The VCF header lists the FASTA's
+    sequences: bcftools 1.24 crashes on an empty VCF without ``##contig`` lines.
+    """
+    with pysam.FastaFile(str(fasta)) as genome:
+        contigs = [f"##contig=<ID={name}>" for name in genome.references]
+    with tempfile.TemporaryDirectory(prefix="omnimissense-") as tmp:
+        vcf = Path(tmp) / "empty.vcf"
+        header = ["##fileformat=VCFv4.2", *contigs, "#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO"]
+        vcf.write_text("\n".join(header) + "\n")
+        run_csq(vcf, fasta, gff3, Path(tmp) / "empty.bcf", dump_gff=output)
 
 
 def missense_consequences(record: pysam.VariantRecord) -> list[tuple[int, Consequence]]:

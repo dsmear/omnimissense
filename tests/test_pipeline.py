@@ -1,10 +1,19 @@
 import csv
 import logging
 import math
+from collections import Counter
 
 import pysam
 import pytest
-from synthetic import DESIGNED_VARIANTS, INTERGENIC_POS, MULTIALLELIC_POS
+from synthetic import (
+    DESIGNED_VARIANTS,
+    INTERGENIC_POS,
+    MT_VARIANTS,
+    MULTIALLELIC_POS,
+    ncbi_gff3_lines,
+    prokaryote_gff3_lines,
+    write_synthetic_with_mitochondrion,
+)
 
 from omnimissense import pipeline
 from omnimissense.cache import ScoreCache
@@ -50,18 +59,23 @@ def _consequence(ref_aa="K", alt_aa="R", pos=2) -> Consequence:
             VariantStatus.PROTEIN_UNAVAILABLE,
         ),
         (_consequence(), None, VariantStatus.PROTEIN_UNAVAILABLE),
+        (
+            _consequence(),
+            Protein("T", "", ProteinStatus.PSEUDOGENE),
+            VariantStatus.PSEUDOGENE,
+        ),
     ],
 )
 def test_classify(consequence, protein, status) -> None:
     assert classify(consequence, protein) is status
 
 
-def _run(synthetic, tmp_path, scorer, *, masked=True, vcf=None):
+def _run(synthetic, tmp_path, scorer, *, masked=True, vcf=None, gff3=None):
     cache = ScoreCache(tmp_path / "cache", "tiny")
     result = annotate(
         vcf or synthetic.vcf,
         synthetic.fasta,
-        synthetic.gff3,
+        gff3 or synthetic.gff3,
         tmp_path / "out.vcf.gz",
         tmp_path / "out.tsv",
         cache=cache,
@@ -108,6 +122,80 @@ def test_annotate_end_to_end(synthetic, tmp_path, tiny_scorer) -> None:
         ("TXB", "D2G"),
         ("TXB", "F4L"),
     }
+
+
+def test_annotate_with_ncbi_refseq_gff3(synthetic, tmp_path, tiny_scorer) -> None:
+    gff3 = tmp_path / "ncbi.gff3"
+    gff3.write_text("\n".join(ncbi_gff3_lines()) + "\n")
+    result, _ = _run(synthetic, tmp_path, tiny_scorer, gff3=gff3)
+    assert result.status_counts == {"ok": N_MISSENSE}
+    changes = {
+        f"{v.consequence.ref_aa}{v.consequence.protein_pos}{v.consequence.alt_aa}"
+        for v in result.variants
+    }
+    expected = {v.expected for v in DESIGNED_VARIANTS if v.expected} | {"E6D"}
+    assert changes == expected
+    assert {v.consequence.transcript_id for v in result.variants} == {
+        "rna-XM_GENEA.1",
+        "rna-XM_GENEB.1",
+    }
+    assert all(v.canonical for v in result.variants)  # no tags: longest CDS of each gene
+
+
+@pytest.mark.parametrize("style", ["ncbi", "prokka"])
+def test_annotate_with_prokaryotic_gff3(synthetic, tmp_path, tiny_scorer, style) -> None:
+    gff3 = tmp_path / f"{style}.gff3"
+    gff3.write_text("\n".join(prokaryote_gff3_lines(style)) + "\n")
+    result, _ = _run(synthetic, tmp_path, tiny_scorer, gff3=gff3)
+    assert result.status_counts == {"ok": N_MISSENSE}
+    expected = {v.expected for v in DESIGNED_VARIANTS if v.expected} | {"E6D"}
+    assert {_change(v) for v in result.variants} == expected
+    assert all(v.consequence.transcript_id.startswith("tx-") for v in result.variants)
+
+
+def _annotate_with_mt(tmp_path, scorer, **codes):
+    files = write_synthetic_with_mitochondrion(tmp_path / "with_mt")
+    result = annotate(
+        files.vcf,
+        files.fasta,
+        files.gff3,
+        tmp_path / "mt.vcf.gz",
+        tmp_path / "mt.tsv",
+        cache=ScoreCache(tmp_path / "cache", "tiny"),
+        scorer_factory=lambda: scorer,
+        model_name="tiny",
+        **codes,
+    )
+    return files, result
+
+
+def _change(v):
+    return f"{v.consequence.ref_aa}{v.consequence.protein_pos}{v.consequence.alt_aa}"
+
+
+def test_mitochondrial_variants_are_scored_with_their_genetic_code(tmp_path, tiny_scorer):
+    files, result = _annotate_with_mt(tmp_path, tiny_scorer, mito_genetic_code=2)
+    mt = {_change(v): v.status.value for v in result.variants if v.chrom == "MT"}
+    assert mt == {change: "ok" for *_site, change in MT_VARIANTS}
+    nuclear = [v for v in result.variants if v.chrom != "MT"]
+    assert Counter(v.status.value for v in nuclear) == {"ok": N_MISSENSE}
+    # One csq run per genetic code, merged back in input order with every record kept.
+    assert [v.record_index for v in result.variants] == sorted(
+        v.record_index for v in result.variants
+    )
+    with pysam.VariantFile(str(tmp_path / "mt.vcf.gz")) as reader:
+        records = list(reader)
+    assert [(r.chrom, r.pos) for r in records] == [
+        (r.chrom, r.pos) for r in pysam.VariantFile(str(files.vcf))
+    ]
+    assert all("OMS" in r.info for r in records if r.chrom == "MT")
+
+
+def test_mitochondrial_variants_without_a_genetic_code_are_skipped(tmp_path, tiny_scorer):
+    _files, result = _annotate_with_mt(tmp_path, tiny_scorer)
+    statuses = {v.status.value for v in result.variants if v.chrom == "MT"}
+    assert statuses == {"mitochondrial_skipped"}
+    assert result.status_counts["ok"] == N_MISSENSE
 
 
 def test_second_run_reads_scores_from_cache(synthetic, tmp_path, tiny_scorer) -> None:

@@ -2,7 +2,9 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
+pytest.importorskip("Bio", reason="benchmark dependencies: uv sync --all-groups")
 sys.path.insert(0, str(Path(__file__).parents[1] / "benchmarks"))
 
 from dog_realistic import (
@@ -53,8 +55,9 @@ def test_rank_in_averages_ties() -> None:
 def test_write_canonical_gff3_keeps_only_selected_transcripts(synthetic, tmp_path) -> None:
     output = tmp_path / "canonical.gff3"
     write_canonical_gff3(synthetic.gff3, {"TXA"}, output)
-    assert set(read_transcripts(output)) == {"TXA"}
-    assert len(read_transcripts(output)["TXA"].cds) == 2
+    transcripts = read_transcripts(output, synthetic.fasta)
+    assert set(transcripts) == {"TXA"}
+    assert len(transcripts["TXA"].cds) == 2
 
 
 def test_bootstrap_difference_of_identical_scores_is_zero() -> None:

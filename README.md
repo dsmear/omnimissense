@@ -24,7 +24,7 @@ exist for any sequenced genome:
 |---|---|
 | VCF | the variants (differences from the reference genome) |
 | FASTA | the reference genome sequence |
-| GFF3 | the gene annotation (where genes, exons and coding sequences are), Ensembl-style |
+| GFF3 | the gene annotation (where genes, exons and coding sequences are): Ensembl, NCBI RefSeq, Prokka or Bakta layout |
 
 It outputs the same VCF (all records, all samples) with protein-language-model scores in the
 `INFO` field, plus a TSV with one row per missense consequence.
@@ -35,9 +35,13 @@ It outputs the same VCF (all records, all samples) with protein-language-model s
    records are flagged (`OMS_REF_MISMATCH`) and skipped; if more than 10% mismatch, the run
    stops (VCF and FASTA are probably from different assemblies).
 2. **Consequences** are called with [`bcftools csq`](https://samtools.github.io/bcftools/howtos/csq-calling.html)
-   (bundled in pysam, nothing to install), one record at a time, for every ALT allele.
-3. **Proteins** are translated from the FASTA + GFF3. The reference amino acid reported by
-   csq must match the translated protein; mismatches are reported (`ref_aa_mismatch`).
+   (bundled in pysam, nothing to install), one record at a time, for every ALT allele, with
+   the genetic code of each sequence (one csq run per code, see
+   [Genetic codes](#genetic-codes)).
+3. **Proteins** are translated from the FASTA + GFF3, using the transcripts exactly as csq
+   parsed them (`--dump-gff`), so both steps always agree on transcripts and coding segments.
+   The reference amino acid reported by csq must match the translated protein; mismatches are
+   reported (`ref_aa_mismatch`).
 4. **Scores** come from a protein language model, by default **VESM 650M** (an ESM-2 650M
    re-trained for variant effects, MIT license; fp16 on GPU), as log-likelihood ratios
    `log P(alt) − log P(ref)` at the mutated position (more negative = more likely damaging):
@@ -76,10 +80,62 @@ uv run omnimissense annotate --vcf my_dogs.vcf.gz --fasta $FASTA --gff3 $GFF3 \
 
 # optional: all scores of all coding transcripts in one Parquet file
 uv run omnimissense export --fasta $FASTA --gff3 $GFF3 -o dog_scores.parquet
+
+# optional: every possible missense SNV at genome coordinates (no GPU needed afterwards)
+uv run omnimissense export-variants --fasta $FASTA --gff3 $GFF3 -o dog_snvs.vcf.gz
 ```
+
+### Annotating without a GPU
+
+`export-variants` writes every possible missense SNV of the canonical coding transcripts
+(`--all-transcripts`: all of them) with its score, at genome coordinates, tabix-indexed:
+
+- `.vcf.gz`: one record per SNV with the same `OMS` / `OMS_WT` tags as `annotate`;
+- `.tsv.gz`: one row per SNV and transcript (`#CHROM POS REF ALT gene transcript canonical
+  protein_variant oms_wt`), for R, pandas or `bcftools annotate -c`.
+
+Any VCF can then be annotated with bcftools alone, in seconds. Split multi-allelic records
+first: `bcftools annotate` matches one annotation record per VCF record, so without the split
+only one ALT of a multi-allelic record gets its score.
+
+```bash
+bcftools norm -m -any my_dogs.vcf.gz -W -Oz -o my_dogs.split.vcf.gz
+bcftools annotate -a dog_snvs.vcf.gz -c INFO/OMS,INFO/OMS_WT my_dogs.split.vcf.gz -Oz -o my_dogs.oms.vcf.gz
+```
+
+The result is identical to `omnimissense annotate` for SNVs (checked on every SNV of 300
+random genes in yeast and in *E. coli*; see Validation). `annotate` is still needed for
+masked marginals and for what the file does not hold: MNVs, and transcripts that are not
+exported. Changes of a start codon (start lost) or to a stop codon are not missense and are
+not in the file. Sizes: dog (canonical transcripts) 73.8 M SNVs; *E. coli* 8.6 M SNVs,
+96 MB (VCF) in 49 s; yeast (all transcripts) 19.3 M SNVs, 216 MB (VCF) or 153 MB (TSV) in
+1–2 min, from cached scores.
 
 The plain-gzip FASTA distributed by Ensembl is recompressed once to BGZF (`.fa.bgz`) next to
 the original, because random access needs it.
+
+**Other species.** Any assembly with an Ensembl or NCBI RefSeq annotation works the same way,
+prokaryotes included (Prokka and Bakta GFF3 too).
+From NCBI, take `<assembly>_genomic.fna.gz` and `<assembly>_genomic.gff.gz` from the
+assembly's FTP folder (e.g. `genomes/all/GCF/000/146/045/GCF_000146045.2_R64/` for yeast);
+transcript IDs are then NCBI's (`rna-NM_…`, `rna-XM_…`). The VCF must use the same sequence
+names as the FASTA (NCBI: accessions such as `NC_001133.9`).
+
+### Genetic codes
+
+Proteins are translated, and consequences called, with the
+[NCBI genetic code](https://www.ncbi.nlm.nih.gov/Taxonomy/Utils/wprintgc.cgi) of each
+sequence (the 26 tables bcftools csq has: 1–6, 9–16, 21–31, 33):
+
+| Sequences | Code used |
+|---|---|
+| nuclear (and other non-mitochondrial) | `--genetic-code`, else the GFF3's `transl_table`, else 1 (standard) |
+| mitochondrial (`MT`, `chrM`, … or NCBI `genome=mitochondrion`) | `--mito-genetic-code`, else the GFF3's `transl_table`, else **skipped** |
+
+NCBI writes `transl_table` on the CDS features whenever the code is not the standard one, so
+NCBI annotations need no option (e.g. yeast mitochondria: table 3; bacteria and plastids: 11;
+*Candida*: 12). Ensembl GFF3 files carry no code: pass e.g. `--mito-genetic-code 2` for
+vertebrate mitochondria (3 yeast, 5 invertebrates) or `--genetic-code 6` for ciliates.
 
 ## Precomputed scores
 
@@ -107,7 +163,8 @@ ref_aa alt_aa protein_length n_windows wt_marginal masked_marginal status`
 
 **Status values:** `ok`, `ref_aa_mismatch` (csq and the translated protein disagree),
 `multi_aa_change` (several residues change), `nonstandard_aa`, `protein_unavailable`
-(e.g. internal stop codon), `mitochondrial_skipped` (see limitations). Only `ok` rows are scored.
+(e.g. internal stop codon), `mitochondrial_skipped` (see limitations), `pseudogene` (CDS
+flagged `pseudo=true` by NCBI: a disrupted gene). Only `ok` rows are scored.
 
 ## Performance (RTX 3070, 8 GB)
 
@@ -135,6 +192,24 @@ do).
 - **Proteome:** the dog proteome translated from FASTA + GFF3 is identical to Ensembl's
   published peptides for 43,524 / 43,524 transcripts (the only exclusion is one
   selenoprotein, see limitations).
+- **NCBI RefSeq annotation** (`benchmarks/ncbi_translation.py`): yeast *S. cerevisiae* R64
+  (GCF_000146045.2), read without conversion; 6,021 / 6,021 proteins identical to NCBI's
+  translation of the same CDS, including the 19 mitochondrial ones (yeast mitochondrial code,
+  taken from the GFF3). The other 6 are ORFs that NCBI itself marks as pseudogenes (internal
+  stop codons).
+- **Prokaryote** (same script): *E. coli* K-12 MG1655 (GCF_000005845.2), whose CDS hang
+  directly from genes; 4,297 / 4,297 proteins identical to NCBI's translation (table 11 from
+  the GFF3), including the programmed frameshifts of *prfB*, *dnaX* and *copA*. Not scored:
+  18 NCBI pseudogenes and 3 selenoproteins.
+- **Genome-coordinate export** (`export-variants`): on every possible SNV of all CDS bases of
+  300 random transcripts, the exported rows equal `annotate`'s scored consequences (yeast
+  955,675 / 955,675, *E. coli* 624,682 / 624,682; same transcripts, positions, amino acids and
+  scores), and `bcftools annotate` with the exported VCF reproduces `annotate`'s `OMS` and
+  `OMS_WT` tags exactly. Unit test: every SNV of the synthetic genome, both strands, codons
+  split by introns, a 5'-incomplete CDS, a mitochondrial gene (table 2).
+- **Genetic codes:** the 26 tables are bcftools csq's own (copied from its source), checked
+  against Biopython's NCBI tables and, for every table, against the amino acids csq reports
+  for every codon (`tests/test_genetic_code*.py`).
 - **ProteinGym** (`benchmarks/proteingym.py`): Spearman correlation between scores and
   experimental fitness. Our ESM-2 masked marginals reproduce the values ProteinGym publishes
   for ESM-2 650M; ProteinGym publishes no VESM values.
@@ -149,6 +224,36 @@ do).
 | BRCA1_HUMAN_Findlay_2018 | human | 1,863 | 1,837 | 0.515 | 0.515 | **0.523** |
 
 The last three are longer than 1022 residues and use our sliding windows.
+
+**Does it hold far from human? ProteinGym, all 217 assays by taxon**
+(`benchmarks/proteingym_all.py`): 2.47 M mutants in 186 proteins, Spearman aggregated as
+ProteinGym does (per protein, then per taxon; overall: per function type). Published models
+on the same assays. VESM and ESM-2 "(ours)" are scored by omnimissense with the wild-type
+marginal (results: `benchmarks/results/proteingym_all_*.tsv`); the other columns are
+ProteinGym's published scores (ESM-2: masked marginal).
+
+| | assays (proteins) | **VESM 650M** | ESM-2 650M (ours) | ESM-2 650M (published) | ESM-C 600M | GEMME (alignments) | VenusREM (structure + alignments) |
+|---|---|---|---|---|---|---|---|
+| Overall (by function) | 217 (186) | **0.457** | 0.418 | 0.414 | 0.405 | 0.455 | 0.518 |
+| Human | 96 (81) | **0.474** | 0.458 | 0.457 | 0.462 | 0.469 | 0.529 |
+| Other eukaryotes | 40 (34) | **0.517** | 0.519 | 0.486 | 0.481 | 0.516 | 0.582 |
+| Prokaryotes | 50 (43) | **0.481** | 0.464 | 0.458 | 0.459 | 0.467 | 0.549 |
+| Viruses | 31 (28) | **0.426** | 0.260 | 0.261 | 0.241 | 0.472 | 0.492 |
+
+- **No loss outside human for cellular life:** VESM scores eukaryotic and prokaryotic proteins
+  at least as well as human ones, on par with alignment-based methods (GEMME), which need a
+  deep multiple sequence alignment for every protein.
+- **Viruses are the weak spot of single-sequence models** (ESM-2 0.260, ESM-C 0.241). VESM
+  recovers most of it: VESM − ESM-2 with the same scoring +0.167 (95% interval +0.103 to
+  +0.230 over proteins; better on 25 of 31 viral assays), so the gain comes from the model,
+  not from the scoring mode. It stays below alignment-based methods (≈0.47): use viral
+  scores with more care.
+- VESM vs ESM-2, same scoring: +0.017 human (+0.003 to +0.030), −0.001 other eukaryotes,
+  +0.017 prokaryotes (−0.004 to +0.040). Our ESM-2 wild-type numbers match ProteinGym's
+  published ESM-2 (masked) within noise (overall +0.008, −0.002 to +0.018).
+- Overall VESM would rank 17th of 98 on the ProteinGym leaderboard, level with the best
+  single-sequence model (VespaG, 0.458, GPL); the models above it mostly also use protein
+  structure and/or alignments.
 
 **Dog benchmark** (`benchmarks/dog_omia.py`): OMIA dog missense variants mapped to dog
 proteins, against Dog10K missense variants with allele frequency ≥ 5% among 1,872 dogs
@@ -223,12 +328,19 @@ What this says:
 
 ## Limitations
 
-- GFF3 must follow the Ensembl layout (`ID=gene:…`, `ID=transcript:…`), as required by
-  bcftools csq. Other sources (e.g. NCBI RefSeq) must be converted first.
-- Mitochondrial transcripts are skipped: mitochondria use a different genetic code and
-  bcftools csq applies a single code to the whole genome.
+- The GFF3 must describe genes and CDS: Ensembl, NCBI RefSeq, Prokka and Bakta layouts work.
+  CDS that hang directly from a gene or have no parent (prokaryotes, NCBI vertebrate
+  mitochondria) get a transcript feature (`tx-<CDS ID>`), and an embedded `##FASTA`
+  section is ignored, in a normalized copy that bcftools csq reads. GTF must be converted to
+  GFF3 first (e.g. AGAT or gffread).
+- Canonical transcripts come from `Ensembl_canonical`, `MANE Select` or `RefSeq Select`
+  tags; genes without any tagged transcript get their longest CDS.
+- Mitochondrial transcripts whose genetic code is unknown (no `--mito-genetic-code`, no
+  `transl_table` in the GFF3) are skipped and reported (`mitochondrial_skipped`).
+- RNA editing (plant mitochondria and plastids) is not modelled: the protein is translated
+  from the genome sequence.
 - Selenoproteins (a TGA codon read as selenocysteine) look like proteins with an internal
-  stop and are skipped (1 transcript in the dog).
+  stop and are skipped (1 transcript in the dog, 3 in *E. coli*).
 - Consequences are computed one record at a time: two nearby variants on the same haplotype
   that change the same codon are scored separately.
 - Variants changing several residues at once (MNVs) are reported but not scored.
@@ -251,7 +363,7 @@ Requires [uv](https://docs.astral.sh/uv/).
 ```bash
 git clone https://github.com/dsmear/omnimissense.git
 cd omnimissense
-uv sync
+uv sync --all-groups           # all groups: the benchmark tests need Biopython
 uv run omnimissense doctor     # bcftools (bundled), PyTorch, CUDA
 ```
 

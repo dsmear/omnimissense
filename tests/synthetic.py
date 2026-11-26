@@ -152,6 +152,67 @@ def _gff3_lines() -> list[str]:
     return lines
 
 
+def ncbi_gff3_lines(*, mitochondrial: bool = False, select: tuple[str, ...] = ()) -> list[str]:
+    """The same two genes in the NCBI RefSeq layout (``gene-``/``rna-``/``cds-`` IDs,
+    ``gene_biotype`` on genes, no biotype on mRNAs). Transcripts are ``rna-XM_GENEA.1`` and
+    ``rna-XM_GENEB.1``; ``select`` lists genes whose mRNA is tagged ``RefSeq Select``."""
+
+    def row(source: str, ftype: str, start: int, end: int, strand: str, phase: str, attrs: str):
+        return "\t".join([CHROM, source, ftype, str(start), str(end), ".", strand, phase, attrs])
+
+    genome = "mitochondrion" if mitochondrial else "chromosome"
+    lines = [
+        "##gff-version 3",
+        f"##sequence-region {CHROM} 1 {len(GENOME)}",
+        row("RefSeq", "region", 1, len(GENOME), "+", ".", f"ID={CHROM}:1..234;genome={genome}"),
+    ]
+    for gene, strand, cds, (start, end) in (
+        ("GENEA", "+", GENE_A_CDS, (41, 97)),
+        ("GENEB", "-", GENE_B_CDS, (138, 194)),
+    ):
+        rna, protein = f"XM_{gene}.1", f"XP_{gene}.1"
+        tag = ";tag=RefSeq Select" if gene in select else ""
+        lines.append(
+            row(
+                "Gnomon",
+                "gene",
+                start,
+                end,
+                strand,
+                ".",
+                f"ID=gene-{gene};Name={gene};gbkey=Gene;gene={gene};gene_biotype=protein_coding",
+            )
+        )
+        lines.append(
+            row(
+                "Gnomon",
+                "mRNA",
+                start,
+                end,
+                strand,
+                ".",
+                f"ID=rna-{rna};Parent=gene-{gene};Name={rna};gbkey=mRNA;transcript_id={rna}{tag}",
+            )
+        )
+        for i, (s, e, _phase) in enumerate(cds, start=1):
+            lines.append(
+                row("Gnomon", "exon", s, e, strand, ".", f"ID=exon-{rna}-{i};Parent=rna-{rna}")
+            )
+        for s, e, phase in cds:
+            lines.append(
+                row(
+                    "Gnomon",
+                    "CDS",
+                    s,
+                    e,
+                    strand,
+                    str(phase),
+                    f"ID=cds-{protein};Parent=rna-{rna};gbkey=CDS;protein_id={protein}",
+                )
+            )
+    return lines
+
+
 def _vcf_records() -> list[tuple[int, str, str]]:
     records = [(v.pos, v.ref, v.alt) for v in DESIGNED_VARIANTS]
     records.append((MULTIALLELIC_POS, GENOME[MULTIALLELIC_POS - 1], ",".join(MULTIALLELIC_ALTS)))
@@ -193,3 +254,69 @@ def write_synthetic(directory: Path) -> SyntheticFiles:
     ]
     vcf.write_text("\n".join(header + body) + "\n")
     return SyntheticFiles(fasta=fasta, gff3=gff3, vcf=vcf)
+
+
+# A mitochondrial sequence with one gene that only makes sense in the vertebrate
+# mitochondrial code (NCBI table 2): ATA = M (start), TGA = W, AGA = stop.
+MT_CHROM = "MT"
+MT_GENOME = "GCGCGCGCGC" + "ATAAAATGACTTTGGAGA" + "GCGCGCGCGC"  # CDS 11..28
+MT_PROTEIN = "MKWLW"  # table 2; the standard code gives I K * L W R
+#: (position, ref, alt, expected change in table 2)
+MT_VARIANTS = [(15, "A", "C", "K2T"), (17, "T", "C", "W3R"), (20, "C", "A", "L4I")]
+
+
+def write_synthetic_with_mitochondrion(directory: Path) -> SyntheticFiles:
+    """The synthetic genome plus an ``MT`` sequence carrying gene GM (transcript TXM)."""
+    files = write_synthetic(directory)
+    with files.fasta.open("a") as fasta:
+        fasta.write(f">{MT_CHROM}\n{MT_GENOME}\n")
+    rows = [
+        [MT_CHROM, "test", "gene", "11", "28", ".", "+", ".",
+         "ID=gene:GM;Name=GENEM;biotype=protein_coding"],
+        [MT_CHROM, "test", "mRNA", "11", "28", ".", "+", ".",
+         "ID=transcript:TXM;Parent=gene:GM;biotype=protein_coding;tag=Ensembl_canonical"],
+        [MT_CHROM, "test", "exon", "11", "28", ".", "+", ".", "Parent=transcript:TXM"],
+        [MT_CHROM, "test", "CDS", "11", "28", ".", "+", "0", "ID=CDS:PM;Parent=transcript:TXM"],
+    ]  # fmt: skip
+    with files.gff3.open("a") as gff3:
+        gff3.write("".join("\t".join(row) + "\n" for row in rows))
+    lines = files.vcf.read_text().splitlines()
+    contig = f"##contig=<ID={MT_CHROM},length={len(MT_GENOME)}>"
+    lines.insert(next(i for i, line in enumerate(lines) if line.startswith("#CHROM")), contig)
+    lines += [
+        "\t".join([MT_CHROM, str(pos), ".", ref, alt, ".", "PASS", ".", "GT", "1"])
+        for pos, ref, alt, _change in MT_VARIANTS
+    ]
+    files.vcf.write_text("\n".join(lines) + "\n")
+    return files
+
+
+def prokaryote_gff3_lines(style: str = "ncbi") -> list[str]:
+    """Genes A and B with their CDS directly under the gene, as prokaryotic annotations have.
+
+    ``style="ncbi"``: NCBI PGAP layout (``gene-``/``cds-`` IDs, CDS ``Parent=gene-…``,
+    ``transl_table=11``). ``style="prokka"``: Prokka without ``--addgenes`` (CDS only, no
+    parent, ``gene``/``locus_tag`` attributes) followed by a ``##FASTA`` section.
+    """
+
+    def row(ftype: str, start: int, end: int, strand: str, phase: str, attrs: str) -> str:
+        return "\t".join([CHROM, "test", ftype, str(start), str(end), ".", strand, phase, attrs])
+
+    lines = ["##gff-version 3"]
+    for gene, strand, cds, (start, end) in (
+        ("geneA", "+", GENE_A_CDS, (41, 97)),
+        ("geneB", "-", GENE_B_CDS, (138, 194)),
+    ):
+        tag = gene[-1]
+        if style == "ncbi":
+            lines.append(
+                row("gene", start, end, strand, ".",
+                    f"ID=gene-{tag};Name={gene};gene_biotype=protein_coding;locus_tag=L_{tag}")
+            )  # fmt: skip
+            attrs = f"ID=cds-WP_{tag}.1;Parent=gene-{tag};protein_id=WP_{tag}.1;transl_table=11"
+        else:
+            attrs = f"ID=PROKKA_0000{tag};gene={gene};locus_tag=PROKKA_0000{tag};product=x"
+        lines += [row("CDS", s, e, strand, str(phase), attrs) for s, e, phase in cds]
+    if style == "prokka":
+        lines += ["##FASTA", f">{CHROM}", GENOME]
+    return lines
