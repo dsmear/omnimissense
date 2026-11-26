@@ -289,3 +289,34 @@ def write_synthetic_with_mitochondrion(directory: Path) -> SyntheticFiles:
     ]
     files.vcf.write_text("\n".join(lines) + "\n")
     return files
+
+
+def prokaryote_gff3_lines(style: str = "ncbi") -> list[str]:
+    """Genes A and B with their CDS directly under the gene, as prokaryotic annotations have.
+
+    ``style="ncbi"``: NCBI PGAP layout (``gene-``/``cds-`` IDs, CDS ``Parent=gene-…``,
+    ``transl_table=11``). ``style="prokka"``: Prokka without ``--addgenes`` (CDS only, no
+    parent, ``gene``/``locus_tag`` attributes) followed by a ``##FASTA`` section.
+    """
+
+    def row(ftype: str, start: int, end: int, strand: str, phase: str, attrs: str) -> str:
+        return "\t".join([CHROM, "test", ftype, str(start), str(end), ".", strand, phase, attrs])
+
+    lines = ["##gff-version 3"]
+    for gene, strand, cds, (start, end) in (
+        ("geneA", "+", GENE_A_CDS, (41, 97)),
+        ("geneB", "-", GENE_B_CDS, (138, 194)),
+    ):
+        tag = gene[-1]
+        if style == "ncbi":
+            lines.append(
+                row("gene", start, end, strand, ".",
+                    f"ID=gene-{tag};Name={gene};gene_biotype=protein_coding;locus_tag=L_{tag}")
+            )  # fmt: skip
+            attrs = f"ID=cds-WP_{tag}.1;Parent=gene-{tag};protein_id=WP_{tag}.1;transl_table=11"
+        else:
+            attrs = f"ID=PROKKA_0000{tag};gene={gene};locus_tag=PROKKA_0000{tag};product=x"
+        lines += [row("CDS", s, e, strand, str(phase), attrs) for s, e, phase in cds]
+    if style == "prokka":
+        lines += ["##FASTA", f">{CHROM}", GENOME]
+    return lines

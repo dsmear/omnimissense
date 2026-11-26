@@ -18,11 +18,18 @@ from __future__ import annotations
 import argparse
 import logging
 import re
+import tempfile
 from collections import Counter
 from pathlib import Path
 
 from omnimissense.fasta import prepare_fasta
-from omnimissense.gff import csq_id, open_text, parse_attributes, read_transcripts
+from omnimissense.gff import (
+    csq_id,
+    open_text,
+    parse_attributes,
+    prepare_annotation,
+    read_transcripts,
+)
 from omnimissense.proteome import ProteinStatus, build_proteome
 
 log = logging.getLogger("ncbi_translation")
@@ -75,10 +82,14 @@ def first_difference(a: str, b: str) -> str:
 
 def compare(fasta: Path, gff3: Path, translated_cds: Path, show: int = 10) -> Counter[str]:
     fasta = prepare_fasta(fasta)
-    transcripts = read_transcripts(gff3, fasta)
+    with tempfile.TemporaryDirectory(prefix="ncbi-translation-") as tmp:
+        # CDS without a transcript (prokaryotes) get one in a normalized copy: read the
+        # protein IDs from the file csq actually read.
+        annotation = prepare_annotation(gff3, Path(tmp))
+        transcripts = read_transcripts(annotation, fasta)
+        protein_ids = cds_protein_ids(annotation.gff3)
     proteins = build_proteome(fasta, transcripts)
     reference = read_translated_cds(translated_cds)
-    protein_ids = cds_protein_ids(gff3)
 
     outcome: Counter[str] = Counter()
     shown = 0

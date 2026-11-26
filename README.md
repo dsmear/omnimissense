@@ -24,7 +24,7 @@ exist for any sequenced genome:
 |---|---|
 | VCF | the variants (differences from the reference genome) |
 | FASTA | the reference genome sequence |
-| GFF3 | the gene annotation (where genes, exons and coding sequences are): Ensembl or NCBI RefSeq layout |
+| GFF3 | the gene annotation (where genes, exons and coding sequences are): Ensembl, NCBI RefSeq, Prokka or Bakta layout |
 
 It outputs the same VCF (all records, all samples) with protein-language-model scores in the
 `INFO` field, plus a TSV with one row per missense consequence.
@@ -85,7 +85,8 @@ uv run omnimissense export --fasta $FASTA --gff3 $GFF3 -o dog_scores.parquet
 The plain-gzip FASTA distributed by Ensembl is recompressed once to BGZF (`.fa.bgz`) next to
 the original, because random access needs it.
 
-**Other species.** Any assembly with an Ensembl or NCBI RefSeq annotation works the same way.
+**Other species.** Any assembly with an Ensembl or NCBI RefSeq annotation works the same way,
+prokaryotes included (Prokka and Bakta GFF3 too).
 From NCBI, take `<assembly>_genomic.fna.gz` and `<assembly>_genomic.gff.gz` from the
 assembly's FTP folder (e.g. `genomes/all/GCF/000/146/045/GCF_000146045.2_R64/` for yeast);
 transcript IDs are then NCBI's (`rna-NM_…`, `rna-XM_…`). The VCF must use the same sequence
@@ -257,10 +258,11 @@ What this says:
 
 ## Limitations
 
-- The GFF3 must be in a layout bcftools csq reads: Ensembl and NCBI RefSeq work
-  (gene → mRNA → CDS). GTF must be converted to GFF3 first (e.g. AGAT or gffread);
-  prokaryotic GFF3 whose CDS hang directly from genes needs a transcript level
-  (bcftools' `misc/gff2gff.py`, or `gbk2bcfgff` from a GenBank file).
+- The GFF3 must describe genes and CDS: Ensembl, NCBI RefSeq, Prokka and Bakta layouts work.
+  CDS that hang directly from a gene or have no parent (prokaryotes, NCBI vertebrate
+  mitochondria) get a transcript feature (`tx-<CDS ID>`), and an embedded `##FASTA`
+  section is ignored, in a normalized copy that bcftools csq reads. GTF must be converted to
+  GFF3 first (e.g. AGAT or gffread).
 - Canonical transcripts come from `Ensembl_canonical`, `MANE Select` or `RefSeq Select`
   tags; genes without any tagged transcript get their longest CDS.
 - Mitochondrial transcripts whose genetic code is unknown (no `--mito-genetic-code`, no

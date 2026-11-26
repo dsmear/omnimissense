@@ -11,6 +11,7 @@ from __future__ import annotations
 import datetime
 import json
 import logging
+import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,7 +23,7 @@ import pyarrow.parquet as pq
 from omnimissense import __version__
 from omnimissense.cache import ScoreCache
 from omnimissense.fasta import prepare_fasta
-from omnimissense.gff import read_transcripts, scan_genetic_codes
+from omnimissense.gff import prepare_annotation, read_transcripts
 from omnimissense.pipeline import LazyScorer, ScorerFactory, cached_wt_scores
 from omnimissense.proteome import ProteinStatus, build_proteome
 from omnimissense.sequences import AMINO_ACIDS
@@ -74,8 +75,10 @@ def export_scores(
 ) -> ExportResult:
     """Write wild-type-marginal scores of every coding transcript; missing scores are computed."""
     fasta = prepare_fasta(fasta)
-    codes = scan_genetic_codes(gff3, genetic_code, mito_genetic_code)
-    transcripts = read_transcripts(gff3, fasta, codes=codes)
+    with tempfile.TemporaryDirectory(prefix="omnimissense-") as tmp:
+        annotation = prepare_annotation(gff3, Path(tmp), genetic_code, mito_genetic_code)
+        transcripts = read_transcripts(annotation, fasta)
+    codes = annotation.codes
     proteins = build_proteome(fasta, transcripts)
     rows = [
         (tid, protein)

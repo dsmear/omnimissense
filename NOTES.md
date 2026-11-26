@@ -251,3 +251,16 @@ protein → writes them to the VCF `INFO` field.
 | Dog regression check (user's machine, commit `4853d8f`): `omnimissense proteome` on Ensembl 116 ROS_Cfam_1.0 | `ok 43524`, `internal_stop 1`; **43,524 / 43,524 identical to Ensembl `pep.all`** (1 Ensembl peptide missing: the known selenoprotein). Standard-code genomes are unchanged by the genetic-code support. |
 | CLI help: `[default: …]` notes escaped | Typer's rich markup swallowed them (`--tsv`, `--cache-dir`, `--device` showed no default) — pre-existing. |
 | Not modelled: RNA editing (plant organelles), selenocysteine (`transl_except`), programmed frameshifts | Translation is from the genome sequence; such proteins are reported (internal stop) or differ from the mature protein. |
+
+---
+
+## 2026-11-26 — Prokaryotic GFF3
+
+| Decision | Rationale |
+|---|---|
+| CDS without a transcript feature get one in a **normalized copy** of the GFF3 (`prepare_annotation`), instead of asking users to run a converter | csq rejects CDS whose parent is a gene ("No usable transcripts found"), the layout of NCBI prokaryotic annotations (PGAP), Prokka (`--addgenes`), Bakta, and NCBI vertebrate mitochondria (CDS `Parent=gene-ND1`, no mRNA). In mixed files csq does not fail: it silently ignores those CDS. Prokka without `--addgenes` writes CDS with no parent at all. Handling it per CDS covers all these cases. |
+| Synthetic IDs: transcript `tx-<CDS ID without "cds-">` (e.g. `tx-WP_000001.1`), gene `gene-<same>` only for parentless CDS; made unique with `-2`, `-3`… | Readable and traceable to the protein accession or locus tag; never equal to an existing feature ID. Transcript biotype = the gene's `gene_biotype`/`biotype`, else `protein_coding`; gene name of a created gene = CDS `gene`, else `Name`, else `locus_tag`. |
+| An embedded `##FASTA` section is dropped in the copy | Checked: csq fails on it ("Could not parse the line") and Prokka/Bakta always write one. |
+| csq, its `--dump-gff` and the metadata pass all read the normalized copy; the copy is written only when needed | Same transcripts everywhere by construction; Ensembl and NCBI eukaryote files (no orphan CDS, no `##FASTA`) are used as they are. The scan for orphans replaces the genetic-code scan: still one extra pass over the GFF3, plus one write pass for prokaryotic files. Parents are assumed to precede children (true of Ensembl, NCBI, Prokka, Bakta). |
+| Hint for unusable GFF3 updated: only GTF (AGAT/gffread) and GENCODE-style attributes (`misc/gff2gff`) still need a converter | |
+| Tests: NCBI-prokaryote and Prokka-style synthetic files (proteins, IDs, gene names, table 11 from `transl_table`), a mixed file (only the orphan CDS changed), `##FASTA` alone, end-to-end `annotate` for both styles; yeast R64 unchanged (6,021 / 6,021) | Real prokaryote check pending: *E. coli* K-12 MG1655 (GCF_000005845.2) vs NCBI `translated_cds`, files to be downloaded by the user. |

@@ -18,6 +18,10 @@
   (NCBI), else the standard code for nuclear sequences. Mitochondrial genes are now scored
   when their code is known (previously always skipped). bcftools csq is run once per code.
 - CLI help now shows the `[default: …]` notes (they were swallowed as rich markup).
+- **Prokaryotic GFF3** (NCBI, Prokka, Bakta) and NCBI vertebrate mitochondria: CDS without
+  a transcript feature get one (`tx-<CDS ID>`, plus `gene-<CDS ID>` when the CDS has no
+  parent) in a normalized copy of the GFF3, which bcftools csq and the translation read; an
+  embedded `##FASTA` section (Prokka, Bakta), which made csq fail, is dropped.
 
 ## 0.2.0 — 2026-11-25
 

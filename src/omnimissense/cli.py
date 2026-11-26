@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import tempfile
 from pathlib import Path
 from typing import Annotated
 
@@ -267,12 +268,14 @@ def proteome(
     from collections import Counter
 
     from omnimissense.fasta import prepare_fasta
-    from omnimissense.gff import read_transcripts, scan_genetic_codes
+    from omnimissense.gff import prepare_annotation, read_transcripts
     from omnimissense.proteome import build_proteome, write_fasta
 
     fasta = prepare_fasta(fasta)
-    codes = scan_genetic_codes(gff3, genetic_code, mito_genetic_code)
-    proteins = build_proteome(fasta, read_transcripts(gff3, fasta, codes=codes))
+    with tempfile.TemporaryDirectory(prefix="omnimissense-") as tmp:
+        annotation = prepare_annotation(gff3, Path(tmp), genetic_code, mito_genetic_code)
+        transcripts = read_transcripts(annotation, fasta)
+    proteins = build_proteome(fasta, transcripts)
     written = write_fasta(proteins.values(), output)
     for status, count in sorted(Counter(p.status.value for p in proteins.values()).items()):
         typer.echo(f"{status:<16} {count}")

@@ -11,6 +11,7 @@ from synthetic import (
     MT_VARIANTS,
     MULTIALLELIC_POS,
     ncbi_gff3_lines,
+    prokaryote_gff3_lines,
     write_synthetic_with_mitochondrion,
 )
 
@@ -134,6 +135,17 @@ def test_annotate_with_ncbi_refseq_gff3(synthetic, tmp_path, tiny_scorer) -> Non
         "rna-XM_GENEB.1",
     }
     assert all(v.canonical for v in result.variants)  # no tags: longest CDS of each gene
+
+
+@pytest.mark.parametrize("style", ["ncbi", "prokka"])
+def test_annotate_with_prokaryotic_gff3(synthetic, tmp_path, tiny_scorer, style) -> None:
+    gff3 = tmp_path / f"{style}.gff3"
+    gff3.write_text("\n".join(prokaryote_gff3_lines(style)) + "\n")
+    result, _ = _run(synthetic, tmp_path, tiny_scorer, gff3=gff3)
+    assert result.status_counts == {"ok": N_MISSENSE}
+    expected = {v.expected for v in DESIGNED_VARIANTS if v.expected} | {"E6D"}
+    assert {_change(v) for v in result.variants} == expected
+    assert all(v.consequence.transcript_id.startswith("tx-") for v in result.variants)
 
 
 def _annotate_with_mt(tmp_path, scorer, **codes):

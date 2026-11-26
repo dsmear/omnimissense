@@ -23,7 +23,7 @@ from omnimissense.cache import ScoreCache
 from omnimissense.consequences import Consequence, missense_consequences, run_csq
 from omnimissense.fasta import prepare_fasta
 from omnimissense.genetic_code import STANDARD, CodeAssignment
-from omnimissense.gff import Transcript, read_transcripts, scan_genetic_codes
+from omnimissense.gff import Transcript, prepare_annotation, read_transcripts
 from omnimissense.proteome import Protein, ProteinStatus, build_proteome
 from omnimissense.scoring import MaskedLMScorer
 from omnimissense.sequences import AA_INDEX
@@ -585,9 +585,9 @@ def annotate(
     sequences; default: from the GFF3 (see ``omnimissense.genetic_code.CodeAssignment``).
     """
     fasta = prepare_fasta(fasta)
-    codes = scan_genetic_codes(gff3, genetic_code, mito_genetic_code)
     with tempfile.TemporaryDirectory(prefix="omnimissense-") as tmp:
-        n_records, ref_mismatches, sites = split_sites(vcf, fasta, Path(tmp), codes)
+        annotation = prepare_annotation(gff3, Path(tmp), genetic_code, mito_genetic_code)
+        n_records, ref_mismatches, sites = split_sites(vcf, fasta, Path(tmp), annotation.codes)
         csq_dump = Path(tmp) / "annotation.gff.gz"
         variants = []
         for i, (code, group) in enumerate(sorted(sites.groups.items())):
@@ -595,7 +595,7 @@ def annotate(
             messages = run_csq(
                 group.sites,
                 fasta,
-                gff3,
+                annotation.gff3,
                 group.csq,
                 threads=threads,
                 dump_gff=csq_dump if i == 0 else None,
@@ -606,7 +606,7 @@ def annotate(
         variants.sort(key=lambda v: v.record_index)  # stable: csq order within a record
         log.info("%d records, %d missense consequences", n_records, len(variants))
 
-        transcripts = read_transcripts(gff3, fasta, csq_dump=csq_dump, codes=codes)
+        transcripts = read_transcripts(annotation, fasta, csq_dump=csq_dump)
         needed = {v.consequence.transcript_id for v in variants}
         proteins = build_proteome(fasta, transcripts, needed)
         classify_variants(variants, transcripts, proteins)
@@ -648,8 +648,9 @@ def precompute(
 ) -> PrecomputeResult:
     """Compute and cache wild-type marginals for every protein of an annotation."""
     fasta = prepare_fasta(fasta)
-    codes = scan_genetic_codes(gff3, genetic_code, mito_genetic_code)
-    transcripts = read_transcripts(gff3, fasta, codes=codes)
+    with tempfile.TemporaryDirectory(prefix="omnimissense-") as tmp:
+        annotation = prepare_annotation(gff3, Path(tmp), genetic_code, mito_genetic_code)
+        transcripts = read_transcripts(annotation, fasta)
     proteins = build_proteome(fasta, transcripts)
     status_counts = Counter(p.status.value for p in proteins.values())
     sequences = {p.seq_hash: p.sequence for p in proteins.values() if p.status is ProteinStatus.OK}

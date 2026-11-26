@@ -6,6 +6,11 @@ protein translation see the same transcripts, IDs and coding segments by constru
 every layout csq accepts. Attributes the dump does not keep are read from the GFF3 itself:
 the original transcript biotype, gene names, canonical-transcript tags, and which sequences
 are mitochondrial or use a non-standard genetic code (NCBI ``transl_table``).
+
+Two common layouts csq cannot read are fixed first, in a normalized copy of the file
+(``prepare_annotation``): CDS features that hang directly from a gene or have no parent
+(prokaryotes from NCBI, Prokka or Bakta; NCBI vertebrate mitochondria) get a transcript
+(and if needed a gene) feature, and an embedded ``##FASTA`` section is dropped.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ from __future__ import annotations
 import gzip
 import io
 import logging
+import re
 import tempfile
 from collections import Counter, defaultdict
 from collections.abc import Iterator
@@ -36,6 +42,9 @@ _MITOCHONDRIAL_GENOMES = frozenset({"mitochondrion"})
 
 #: ID prefixes of the Ensembl layout, which csq strips.
 _ID_PREFIXES = ("gene:", "transcript:")
+
+#: Feature types that can parent a transcript; a CDS directly under one lacks a transcript.
+_GENE_TYPES = frozenset({"gene", "pseudogene"})
 
 
 class GffFormatError(ValueError):
@@ -143,34 +152,130 @@ def read_csq_dump(path: Path) -> dict[str, Transcript]:
     return transcripts
 
 
-def scan_genetic_codes(
-    gff3: Path, nuclear: int | None = None, mitochondrial: int | None = None
-) -> CodeAssignment:
-    """The genetic code of every sequence: the given codes, else what the GFF3 says.
+def _attribute(text: str, key: str) -> str | None:
+    """One raw attribute value from a column-9 string, without parsing the others."""
+    for item in text.split(";"):
+        name, sep, value = item.partition("=")
+        if sep and name.strip() == key:
+            return unquote(value.strip())
+    return None
 
-    A quick pass reads only NCBI ``region`` features (``genome=mitochondrion``) and the
-    ``transl_table`` attribute of CDS features (NCBI writes it when the code is not the
-    standard one). ``nuclear`` and ``mitochondrial`` override the GFF3 (see
-    ``CodeAssignment``).
+
+def _escape(value: str) -> str:
+    """Escape a GFF3 attribute value."""
+    for char, code in (("%", "%25"), (";", "%3B"), ("=", "%3D"), ("&", "%26"), (",", "%2C")):
+        value = value.replace(char, code)
+    return value
+
+
+def _set_parent(attr_text: str, parent: str) -> str:
+    text = attr_text.rstrip(";")
+    if re.search(r"(^|;)\s*Parent=", text):
+        return re.sub(r"((?:^|;)\s*Parent=)[^;]*", lambda m: m.group(1) + _escape(parent), text)
+    return f"{text};Parent={_escape(parent)}"
+
+
+@dataclass
+class _OrphanCds:
+    """A CDS (one or more CDS lines with the same ID) that has no transcript feature."""
+
+    seqid: str
+    strand: str
+    start: int
+    end: int
+    gene_id: str | None  # the parent gene; None if the CDS has no parent at all
+    name: str  # for a gene that has to be created
+    transcript_id: str = ""
+    new_gene_id: str = ""
+
+
+def _cds_key(columns: list[str], cds_id: str | None, gene_id: str | None) -> tuple[str, ...]:
+    if cds_id:
+        return (gene_id or "", cds_id)
+    return (gene_id or "", columns[0], columns[3], columns[4], columns[6])
+
+
+@dataclass(frozen=True)
+class Annotation:
+    """A GFF3 annotation ready for bcftools csq, with each sequence's genetic code.
+
+    ``gff3`` is the file csq and omnimissense read: ``source`` itself, or a normalized copy
+    when ``source`` has CDS without a transcript or an embedded ``##FASTA`` section, which
+    csq cannot read.
+    """
+
+    source: Path
+    gff3: Path
+    codes: CodeAssignment
+    n_added_transcripts: int = 0
+
+
+def prepare_annotation(
+    gff3: Path,
+    directory: Path,
+    genetic_code: int | None = None,
+    mito_genetic_code: int | None = None,
+) -> Annotation:
+    """Scan ``gff3`` once; write a normalized copy into ``directory`` if csq needs one.
+
+    The scan finds mitochondrial sequences (NCBI ``region`` with ``genome=mitochondrion``),
+    each sequence's ``transl_table`` (NCBI writes it on CDS features when the code is not the
+    standard one) and CDS features without a transcript. ``genetic_code`` and
+    ``mito_genetic_code`` override the GFF3's codes (see ``CodeAssignment``). Parent
+    features are assumed to come before their children, as in Ensembl, NCBI, Prokka and
+    Bakta files.
     """
     mito_seqids = set()
     tables: dict[str, Counter[int]] = defaultdict(Counter)
+    genes: dict[str, str] = {}  # gene-type feature ID -> its biotype ("" if none)
+    orphans: dict[tuple[str, ...], _OrphanCds] = {}
+    has_fasta = False
     with open_text(gff3) as handle:
         for line in handle:
             if line.startswith("#"):
                 if line.startswith("##FASTA"):
+                    has_fasta = True
                     break
-                continue
-            if "\tregion\t" not in line and "transl_table=" not in line:
                 continue
             columns = line.rstrip("\n").split("\t")
             if len(columns) != 9:
                 continue
-            attributes = parse_attributes(columns[8])
-            if columns[2] == "region" and attributes.get("genome") in _MITOCHONDRIAL_GENOMES:
-                mito_seqids.add(columns[0])
-            elif columns[2] == "CDS" and attributes.get("transl_table", "").isdigit():
-                tables[columns[0]][int(attributes["transl_table"])] += 1
+            feature, attr_text = columns[2], columns[8]
+            if feature in _GENE_TYPES:
+                gene_id = _attribute(attr_text, "ID")
+                if gene_id:
+                    biotype = _attribute(attr_text, "gene_biotype") or _attribute(
+                        attr_text, "biotype"
+                    )
+                    genes[gene_id] = biotype or ""
+            elif feature == "region":
+                if _attribute(attr_text, "genome") in _MITOCHONDRIAL_GENOMES:
+                    mito_seqids.add(columns[0])
+            elif feature == "CDS":
+                table = _attribute(attr_text, "transl_table")
+                if table and table.isdigit():
+                    tables[columns[0]][int(table)] += 1
+                parents = [p for p in (_attribute(attr_text, "Parent") or "").split(",") if p]
+                gene_parent = next((p for p in parents if p in genes), None)
+                if parents and gene_parent is None:
+                    continue  # under a transcript: csq reads it as is
+                cds_id = _attribute(attr_text, "ID")
+                key = _cds_key(columns, cds_id, gene_parent)
+                start, end = int(columns[3]), int(columns[4])
+                orphan = orphans.get(key)
+                if orphan is None:
+                    name = next(
+                        (
+                            v
+                            for k in ("gene", "Name", "locus_tag")
+                            if (v := _attribute(attr_text, k))
+                        ),
+                        cds_id or f"{columns[0]}:{start}-{end}",
+                    )
+                    orphans[key] = _OrphanCds(columns[0], columns[6], start, end, gene_parent, name)
+                else:
+                    orphan.start, orphan.end = min(orphan.start, start), max(orphan.end, end)
+
     annotated = {}
     for seqid, counts in tables.items():
         (table_id, _n), *others = counts.most_common()
@@ -182,7 +287,78 @@ def scan_genetic_codes(
                 table_id,
             )
         annotated[seqid] = table_id
-    return CodeAssignment(nuclear, mitochondrial, annotated, frozenset(mito_seqids))
+    codes = CodeAssignment(genetic_code, mito_genetic_code, annotated, frozenset(mito_seqids))
+    if not orphans and not has_fasta:
+        return Annotation(gff3, gff3, codes)
+
+    normalized = directory / "annotation.normalized.gff3"
+    _write_normalized(gff3, normalized, genes, orphans)
+    if orphans:
+        log.info(
+            "%s: %d CDS without a transcript feature (prokaryote-style); transcripts added "
+            "for bcftools csq",
+            gff3.name,
+            len(orphans),
+        )
+    return Annotation(gff3, normalized, codes, len(orphans))
+
+
+def _write_normalized(
+    source: Path, output: Path, genes: dict[str, str], orphans: dict[tuple[str, ...], _OrphanCds]
+) -> None:
+    """Copy ``source`` without its ``##FASTA`` section, giving each orphan CDS a transcript
+    (``tx-<CDS ID without "cds-">``) and, when it has no parent, a gene (``gene-<same>``)."""
+    used = set(genes)
+
+    def unique(candidate: str) -> str:
+        identifier, n = candidate, 1
+        while identifier in used:
+            n += 1
+            identifier = f"{candidate}-{n}"
+        used.add(identifier)
+        return identifier
+
+    for key, orphan in orphans.items():
+        base = key[1].removeprefix("cds-") if len(key) == 2 else (orphan.gene_id or orphan.name)
+        orphan.transcript_id = unique(f"tx-{base}")
+        if orphan.gene_id is None:
+            orphan.new_gene_id = unique(f"gene-{base}")
+
+    def row(orphan: _OrphanCds, feature: str, attrs: str) -> str:
+        fields = [orphan.seqid, "omnimissense", feature, str(orphan.start), str(orphan.end)]
+        return "\t".join([*fields, ".", orphan.strand, ".", attrs]) + "\n"
+
+    emitted = set()
+    with open_text(source) as src, output.open("w", encoding="utf-8") as dst:
+        for line in src:
+            if line.startswith("##FASTA"):
+                break
+            columns = line.rstrip("\n").split("\t")
+            if line.startswith("#") or len(columns) != 9 or columns[2] != "CDS":
+                dst.write(line)
+                continue
+            parents = [p for p in (_attribute(columns[8], "Parent") or "").split(",") if p]
+            gene_parent = next((p for p in parents if p in genes), None)
+            key = _cds_key(columns, _attribute(columns[8], "ID"), gene_parent)
+            orphan = orphans.get(key) if not parents or gene_parent else None
+            if orphan is None:
+                dst.write(line)
+                continue
+            if key not in emitted:
+                emitted.add(key)
+                gene_id = orphan.gene_id or orphan.new_gene_id
+                if orphan.gene_id is None:
+                    name = _escape(orphan.name)
+                    attrs = f"ID={_escape(gene_id)};Name={name};biotype=protein_coding"
+                    dst.write(row(orphan, "gene", attrs))
+                biotype = genes.get(orphan.gene_id or "", "") or "protein_coding"
+                attrs = (
+                    f"ID={_escape(orphan.transcript_id)};Parent={_escape(gene_id)};"
+                    f"biotype={_escape(biotype)}"
+                )
+                dst.write(row(orphan, "mRNA", attrs))
+            columns[8] = _set_parent(columns[8], orphan.transcript_id)
+            dst.write("\t".join(columns) + "\n")
 
 
 def _add_source_attributes(path: Path, transcripts: dict[str, Transcript]) -> dict[str, bool]:
@@ -254,35 +430,42 @@ def _log_genetic_codes(transcripts: dict[str, Transcript]) -> None:
 
 
 def read_transcripts(
-    gff3: Path,
-    fasta: Path,
-    *,
-    csq_dump: Path | None = None,
-    codes: CodeAssignment | None = None,
+    annotation: Annotation | Path, fasta: Path, *, csq_dump: Path | None = None
 ) -> dict[str, Transcript]:
-    """All transcripts of ``gff3`` as bcftools csq reads them, keyed by csq's transcript ID.
+    """All transcripts as bcftools csq reads them, keyed by csq's transcript ID.
 
-    ``fasta`` must be indexable by htslib (plain or BGZF). ``csq_dump`` is the ``--dump-gff``
-    output of an earlier csq run on the same files; without it csq is run here. ``codes``
-    gives each sequence's genetic code (default: ``scan_genetic_codes(gff3)``).
+    ``annotation`` is a GFF3 path or a ``prepare_annotation`` result (needed to choose the
+    genetic codes, and when ``csq_dump`` is given). ``fasta`` must be indexable by htslib
+    (plain or BGZF). ``csq_dump`` is the ``--dump-gff`` output of an earlier csq run on
+    ``annotation.gff3``; without it csq is run here.
 
     Canonical transcripts come from the GFF3's tags (``CANONICAL_TAGS``); genes without any
     tagged transcript get the coding transcript with the longest CDS.
     """
+    if isinstance(annotation, Annotation):
+        return _read_prepared(annotation, fasta, csq_dump)
+    if csq_dump is not None:
+        raise ValueError("csq_dump requires a prepared Annotation (the file csq read)")
+    with tempfile.TemporaryDirectory(prefix="omnimissense-") as tmp:
+        return _read_prepared(prepare_annotation(annotation, Path(tmp)), fasta, None)
+
+
+def _read_prepared(
+    annotation: Annotation, fasta: Path, csq_dump: Path | None
+) -> dict[str, Transcript]:
     if csq_dump is None:
         with tempfile.TemporaryDirectory(prefix="omnimissense-") as tmp:
             dump = Path(tmp) / "annotation.gff.gz"
-            dump_annotation(fasta, gff3, dump)
+            dump_annotation(fasta, annotation.gff3, dump)
             transcripts = read_csq_dump(dump)
     else:
         transcripts = read_csq_dump(csq_dump)
-    if codes is None:
-        codes = scan_genetic_codes(gff3)
+    codes = annotation.codes
     for transcript in transcripts.values():
         transcript.mitochondrial = codes.is_mitochondrial(transcript.seqid)
         transcript.genetic_code = codes.code(transcript.seqid)
     _log_genetic_codes(transcripts)
-    tagged_genes = _add_source_attributes(gff3, transcripts)
+    tagged_genes = _add_source_attributes(annotation.gff3, transcripts)
     n_untagged = _choose_untagged_canonicals(transcripts, tagged_genes)
     n_genes = len({tx.gene_id for tx in transcripts.values() if tx.cds})
     if n_untagged:

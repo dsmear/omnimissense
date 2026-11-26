@@ -1,10 +1,24 @@
 import gzip
 
 import pytest
-from synthetic import CHROM, PROTEIN_A, PROTEIN_B, _gff3_lines, ncbi_gff3_lines
+from synthetic import (
+    CHROM,
+    GENOME,
+    PROTEIN_A,
+    PROTEIN_B,
+    _gff3_lines,
+    ncbi_gff3_lines,
+    prokaryote_gff3_lines,
+)
 
 from omnimissense.consequences import CsqError
-from omnimissense.gff import CdsSegment, csq_id, parse_attributes, read_transcripts
+from omnimissense.gff import (
+    CdsSegment,
+    csq_id,
+    parse_attributes,
+    prepare_annotation,
+    read_transcripts,
+)
 from omnimissense.proteome import ProteinStatus, build_proteome
 
 
@@ -138,15 +152,69 @@ def test_original_biotype_is_kept(synthetic, tmp_path) -> None:
     assert transcripts["TXA"].biotype == "nonsense_mediated_decay"
 
 
-def test_cds_directly_under_genes_is_rejected_with_a_hint(synthetic, tmp_path) -> None:
+@pytest.mark.parametrize(
+    ("style", "expected"),
+    [
+        ("ncbi", {"tx-WP_A.1": ("gene-A", "geneA"), "tx-WP_B.1": ("gene-B", "geneB")}),
+        (
+            "prokka",
+            {
+                "tx-PROKKA_0000A": ("gene-PROKKA_0000A", "geneA"),
+                "tx-PROKKA_0000B": ("gene-PROKKA_0000B", "geneB"),
+            },
+        ),
+    ],
+)
+def test_cds_without_a_transcript_get_one(synthetic, tmp_path, style, expected) -> None:
+    gff = _write(tmp_path / f"{style}.gff3", prokaryote_gff3_lines(style))
+    transcripts = read_transcripts(gff, synthetic.fasta)
+    assert {t: (tx.gene_id, tx.gene_name) for t, tx in transcripts.items()} == expected
+    assert all(tx.canonical and tx.biotype == "protein_coding" for tx in transcripts.values())
+    proteins = build_proteome(synthetic.fasta, transcripts)
+    assert sorted(p.sequence for p in proteins.values()) == sorted([PROTEIN_A, PROTEIN_B])
+
+
+def test_prokaryotic_genetic_code_comes_from_the_gff3(synthetic, tmp_path) -> None:
+    gff = _write(tmp_path / "ncbi.gff3", prokaryote_gff3_lines("ncbi"))
+    annotation = prepare_annotation(gff, tmp_path)
+    assert annotation.codes.code(CHROM) == 11
+    assert annotation.n_added_transcripts == 2
+    assert annotation.gff3 != gff  # csq reads the normalized copy
+    assert {tx.genetic_code for tx in read_transcripts(annotation, synthetic.fasta).values()} == {
+        11
+    }
+
+
+def test_only_cds_without_a_transcript_are_changed(synthetic, tmp_path) -> None:
+    # NCBI vertebrate mitochondria: CDS under the gene, in a file whose other genes have mRNAs.
+    lines = ncbi_gff3_lines()
+    gene_b = [line for line in lines if "GENEB" in line]
+    lines = [line for line in lines if "GENEB" not in line]
+    for line in gene_b:
+        columns = line.split("\t")
+        if columns[2] == "gene":
+            lines.append(line)
+        elif columns[2] == "CDS":
+            lines.append(line.replace("Parent=rna-XM_GENEB.1", "Parent=gene-GENEB"))
+    transcripts = read_transcripts(_write(tmp_path / "mixed.gff3", lines), synthetic.fasta)
+    assert set(transcripts) == {"rna-XM_GENEA.1", "tx-XP_GENEB.1"}
+    assert transcripts["tx-XP_GENEB.1"].gene_id == "gene-GENEB"
+    proteins = build_proteome(synthetic.fasta, transcripts)
+    assert proteins["tx-XP_GENEB.1"].sequence == PROTEIN_B
+
+
+def test_embedded_fasta_section_is_dropped(synthetic, tmp_path) -> None:
+    lines = [*_gff3_lines(), "##FASTA", f">{CHROM}", GENOME]
+    annotation = prepare_annotation(_write(tmp_path / "with_fasta.gff3", lines), tmp_path)
+    assert annotation.n_added_transcripts == 0
+    assert "##FASTA" not in annotation.gff3.read_text()
+    assert set(read_transcripts(annotation, synthetic.fasta)) == {"TXA", "TXB"}
+
+
+def test_unusable_gff3_is_rejected_with_a_hint(synthetic, tmp_path) -> None:
     gff = _write(
-        tmp_path / "prokaryote.gff3",
-        [
-            "##gff-version 3",
-            _row("gene", 41, 97, "+", ".", "ID=gene-A;Name=geneA;gene_biotype=protein_coding"),
-            _row("CDS", 41, 47, "+", "0", "ID=cds-WP_1.1;Parent=gene-A"),
-            _row("CDS", 78, 97, "+", "2", "ID=cds-WP_1.1;Parent=gene-A"),
-        ],
+        tmp_path / "genes_only.gff3",
+        ["##gff-version 3", _row("gene", 41, 97, "+", ".", "ID=gene-A;Name=geneA")],
     )
-    with pytest.raises(CsqError, match="needs a transcript level"):
+    with pytest.raises(CsqError, match="GTF to GFF3"):
         read_transcripts(gff, synthetic.fasta)
