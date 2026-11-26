@@ -221,6 +221,8 @@ def precompute(
     if result.n_scored:
         rate = result.residues_scored / result.seconds
         typer.echo(f"Time:                {result.seconds:.0f} s ({rate:.0f} residues/s)")
+    if result.reference_snvs:
+        typer.echo(f"Percentile reference: {result.reference_snvs} missense SNVs")
 
 
 @app.command()

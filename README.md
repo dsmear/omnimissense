@@ -107,9 +107,10 @@ with `uv run`.
 `export-variants` writes every possible missense SNV of the canonical coding transcripts
 (`--all-transcripts`: all of them) with its score, at genome coordinates, tabix-indexed:
 
-- `.vcf.gz`: one record per SNV with the same `OMS` / `OMS_WT` tags as `annotate`;
+- `.vcf.gz`: one record per SNV with the same `OMS` / `OMS_WT` / `OMS_WT_PCT` tags as
+  `annotate`;
 - `.tsv.gz`: one row per SNV and transcript (`#CHROM POS REF ALT gene transcript canonical
-  protein_variant oms_wt`), for R, pandas or `bcftools annotate -c`.
+  protein_variant oms_wt oms_wt_percentile`), for R, pandas or `bcftools annotate -c`.
 
 Any VCF can then be annotated with bcftools alone, in seconds. Split multi-allelic records
 first (`bcftools annotate` matches one annotation record per VCF record, so without the split
@@ -119,7 +120,7 @@ annotate` with a VCF annotation file needs an indexed input):
 ```bash
 bcftools norm -m -any -Oz -o my_dogs.split.vcf.gz my_dogs.vcf.gz
 bcftools index -t my_dogs.split.vcf.gz
-bcftools annotate -a dog_snvs.vcf.gz -c INFO/OMS,INFO/OMS_WT -Oz -o my_dogs.oms.vcf.gz my_dogs.split.vcf.gz
+bcftools annotate -a dog_snvs.vcf.gz -c INFO/OMS,INFO/OMS_WT,INFO/OMS_WT_PCT -Oz -o my_dogs.oms.vcf.gz my_dogs.split.vcf.gz
 ```
 
 The result is identical to `omnimissense annotate` for SNVs (checked on every SNV of 300
@@ -171,12 +172,24 @@ schema, provenance and limitations.
 |---|---|---|
 | `OMS` | `.` | one entry per missense consequence: `Allele\|Gene\|Transcript\|Canonical\|ProteinPos\|RefAA\|AltAA\|WTMarginal\|MaskedMarginal\|Status` |
 | `OMS_WT` | `A` | lowest (most damaging) wild-type-marginal score across transcripts, per ALT allele |
+| `OMS_WT_PCT` | `A` | proteome-wide percentile of `OMS_WT` (see below); needs `omnimissense precompute` once |
 | `OMS_MM` | `A` | lowest masked-marginal score across transcripts, per ALT allele (only with `--masked`) |
 | `OMS_REF_MISMATCH` | flag | the REF allele does not match the genome; record not annotated |
 | `BCSQ` | `.` | consequences from bcftools csq (all consequence types) |
 
 **TSV columns:** `chrom pos ref alt gene transcript canonical biotype strand protein_pos
-ref_aa alt_aa protein_length n_windows wt_marginal masked_marginal status`
+ref_aa alt_aa protein_length n_windows wt_marginal masked_marginal status wt_percentile`
+
+**Percentiles.** The raw score (a log-likelihood ratio) has no fixed scale. `OMS_WT_PCT` and
+`wt_percentile` give it one: the percent of all possible missense SNVs of the genome's
+canonical transcripts that have a lower (more damaging) score. `0.5` means "among the 0.5%
+most damaging missense changes possible in this genome", for any gene, species or model. It
+is a monotone transform of the score, so it changes no ranking. The reference distribution
+is built by `omnimissense precompute` (or `export-variants`) and stored in the cache, keyed
+by the GFF3, the genome and the genetic codes; without it the fields stay empty. A
+percentile within each protein was considered and rejected: it discards what separates
+genes (dog pathogenic variants sit at a median 34th percentile of their own protein, while
+the raw score separates them from common variants with AUROC 0.977).
 
 **Status values:** `ok`, `ref_aa_mismatch` (csq and the translated protein disagree),
 `multi_aa_change` (several residues change), `nonstandard_aa`, `protein_unavailable`
@@ -367,7 +380,8 @@ What this says:
 - Consequences are computed one record at a time: two nearby variants on the same haplotype
   that change the same codon are scored separately.
 - Variants changing several residues at once (MNVs) are reported but not scored.
-- Scores are raw log-likelihood ratios, not calibrated probabilities of pathogenicity.
+- Scores are raw log-likelihood ratios, not calibrated probabilities of pathogenicity; the
+  percentile gives them a genome-wide scale, not a probability either.
 - Viral proteins are scored less reliably than cellular ones (ProteinGym: VESM 0.43 on
   viruses vs 0.47–0.52 elsewhere; alignment-based methods ≈0.47 on viruses).
 

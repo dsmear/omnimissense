@@ -10,10 +10,12 @@ at a complete 5' end (start lost), to a stop codon (stop gained), of the stop co
 The output format follows the file name:
 
 * ``.tsv.gz``: one row per SNV and transcript: ``#CHROM POS REF ALT gene transcript
-  canonical protein_variant oms_wt``;
+  canonical protein_variant oms_wt oms_wt_percentile``;
 * ``.vcf.gz``: one record per SNV, with ``omnimissense annotate``'s INFO tags (``OMS`` per
-  transcript, ``OMS_WT`` = lowest score), ready for ``bcftools annotate -a`` or VEP
-  ``--custom``.
+  transcript, ``OMS_WT`` = lowest score, ``OMS_WT_PCT`` its proteome-wide percentile),
+  ready for ``bcftools annotate -a`` or VEP ``--custom``.
+
+The percentile reference (``omnimissense.reference``) is built first if the cache lacks it.
 
 Both are BGZF-compressed and tabix-indexed (CSI when a sequence is longer than 2^29 bp).
 """
@@ -32,7 +34,6 @@ import pysam
 from omnimissense import __version__
 from omnimissense.cache import ScoreCache
 from omnimissense.fasta import prepare_fasta
-from omnimissense.genetic_code import GENETIC_CODES
 from omnimissense.gff import Transcript, prepare_annotation, read_transcripts
 from omnimissense.pipeline import (
     _INFO_DEFINITIONS,
@@ -41,110 +42,24 @@ from omnimissense.pipeline import (
     _sanitize,
     cached_wt_scores,
 )
-from omnimissense.proteome import Protein, ProteinStatus, build_proteome, coding_sequence
-from omnimissense.sequences import AA_INDEX, AMINO_ACIDS
+from omnimissense.proteome import Protein, ProteinStatus, build_proteome
+from omnimissense.reference import (
+    Reference,
+    build_reference,
+    load_reference,
+    reference_key,
+    save_reference,
+)
+from omnimissense.sequences import AMINO_ACIDS
+from omnimissense.snvs import _BASES, TranscriptSnvs, transcript_snvs
 
 log = logging.getLogger(__name__)
 
-TSV_HEADER = "#CHROM\tPOS\tREF\tALT\tgene\ttranscript\tcanonical\tprotein_variant\toms_wt\n"
-_BASES = "ACGT"
-_BASE_INDEX = np.full(256, 4, dtype=np.int8)
-for _i, _b in enumerate(_BASES.encode()):
-    _BASE_INDEX[_b] = _i
-_COMPLEMENT = np.array([3, 2, 1, 0], dtype=np.int8)  # A<->T, C<->G
+TSV_HEADER = (
+    "#CHROM\tPOS\tREF\tALT\tgene\ttranscript\tcanonical\tprotein_variant\toms_wt"
+    "\toms_wt_percentile\n"
+)
 _TBI_MAX = 2**29 - 1  # longest sequence a .tbi index can hold
-
-
-@dataclass(frozen=True)
-class _CodeArrays:
-    amino_acid: np.ndarray  # codon index (16*b0 + 4*b1 + b2) -> AMINO_ACIDS index, -1 if none
-    stop: np.ndarray  # codon index -> stop codon of the table
-    start: np.ndarray  # codon index -> initiation codon of the table
-
-
-def _code_arrays(table_id: int, _cache: dict[int, _CodeArrays] = {}) -> _CodeArrays:  # noqa: B006
-    if table_id not in _cache:
-        code = GENETIC_CODES[table_id]
-        codons = [a + b + c for a in _BASES for b in _BASES for c in _BASES]
-        _cache[table_id] = _CodeArrays(
-            amino_acid=np.array([AA_INDEX.get(code.codons[c], -1) for c in codons]),
-            stop=np.array([c in code.stops for c in codons]),
-            start=np.array([c in code.starts for c in codons]),
-        )
-    return _cache[table_id]
-
-
-def cds_positions(transcript: Transcript) -> np.ndarray:
-    """1-based genome position of every base of ``coding_sequence(transcript)``."""
-    parts = [
-        np.arange(s.start, s.end + 1)
-        if transcript.strand == "+"
-        else np.arange(s.end, s.start - 1, -1)
-        for s in transcript.cds_in_transcript_order()
-    ]
-    first_phase = transcript.cds_in_transcript_order()[0].phase or 0
-    return np.concatenate(parts)[first_phase:]
-
-
-@dataclass
-class TranscriptSnvs:
-    """Missense SNVs of one transcript, as parallel arrays (genome orientation)."""
-
-    pos: np.ndarray  # 1-based
-    ref: np.ndarray  # base index in "ACGT", + strand
-    alt: np.ndarray
-    protein_pos: np.ndarray  # 1-based
-    ref_aa: np.ndarray  # AMINO_ACIDS index
-    alt_aa: np.ndarray
-    score: np.ndarray
-
-
-def transcript_snvs(
-    fasta: pysam.FastaFile, transcript: Transcript, protein: Protein, llr: np.ndarray
-) -> TranscriptSnvs:
-    """All missense SNVs of a translated transcript with their wild-type-marginal scores."""
-    arrays = _code_arrays(transcript.genetic_code)
-    n_codons = len(protein.sequence)
-    if n_codons == 0:
-        empty = np.zeros(0, dtype=np.int64)
-        return TranscriptSnvs(empty, empty, empty, empty, empty, empty, np.zeros(0, np.float32))
-    cds = coding_sequence(fasta, transcript)[: 3 * n_codons]
-    positions = cds_positions(transcript)[: 3 * n_codons].reshape(n_codons, 3)
-    bases = _BASE_INDEX[np.frombuffer(cds.encode(), dtype=np.uint8)].reshape(n_codons, 3)
-    valid = (bases < 4).all(axis=1)
-    safe = np.where(valid[:, None], bases, 0).astype(np.int64)
-    codon = 16 * safe[:, 0] + 4 * safe[:, 1] + safe[:, 2]
-    ref_aa = np.array([AA_INDEX.get(aa, -1) for aa in protein.sequence])
-    # Codons read as written (not the initiation codon turned into M, not ambiguous bases).
-    usable = valid & (ref_aa >= 0) & (arrays.amino_acid[codon] == ref_aa)
-    if transcript.complete_5prime and arrays.start[codon[0]]:
-        usable[0] = False  # changes of the start codon are "start lost" for csq
-    parts = defaultdict(list)
-    weights = (16, 4, 1)
-    for j in range(3):
-        for alt in range(4):
-            new = codon + (alt - safe[:, j]) * weights[j]
-            new_aa = arrays.amino_acid[new]
-            missense = (
-                usable
-                & (safe[:, j] != alt)
-                & (new_aa >= 0)
-                & ~arrays.stop[new]
-                & (new_aa != ref_aa)
-            )
-            idx = np.flatnonzero(missense)
-            parts["pos"].append(positions[idx, j])
-            parts["ref"].append(bases[idx, j])
-            parts["alt"].append(np.full(len(idx), alt, dtype=np.int8))
-            parts["protein_pos"].append(idx + 1)
-            parts["ref_aa"].append(ref_aa[idx])
-            parts["alt_aa"].append(new_aa[idx])
-            parts["score"].append(llr[idx, new_aa[idx]])
-    result = {key: np.concatenate(values) for key, values in parts.items()}
-    if transcript.strand == "-":
-        result["ref"] = _COMPLEMENT[result["ref"]]
-        result["alt"] = _COMPLEMENT[result["alt"]]
-    return TranscriptSnvs(**result)
 
 
 @dataclass
@@ -167,7 +82,7 @@ def _vcf_header(contigs: list[tuple[str, int]], model_name: str) -> str:
     lines = ["##fileformat=VCFv4.2"]
     lines += [f"##contig=<ID={name},length={length}>" for name, length in contigs]
     lines += [f"##omnimissenseVersion={__version__}", f"##omnimissenseModel={model_name}"]
-    for tag in ("OMS", "OMS_WT"):
+    for tag in ("OMS", "OMS_WT", "OMS_WT_PCT"):
         number, kind, description = _INFO_DEFINITIONS[tag]
         lines.append(f'##INFO=<ID={tag},Number={number},Type={kind},Description="{description}">')
     lines.append("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO")
@@ -213,6 +128,13 @@ def export_variants(
     )
 
     scorer = LazyScorer(scorer_factory)
+    key = reference_key(gff3, fasta, annotation.codes)
+    reference = load_reference(cache.directory, key)
+    if reference is None:
+        reference = build_reference(
+            fasta, selected, proteins, lambda seqs: cached_wt_scores(seqs, cache, scorer)
+        )
+        save_reference(cache.directory, key, reference)
     n_rows = n_sites = 0
     output.parent.mkdir(parents=True, exist_ok=True)
     with pysam.FastaFile(str(fasta)) as genome:
@@ -231,7 +153,7 @@ def export_variants(
                     )
                     for t in tids
                 }
-                rows, sites = _write_sequence(out, kind, seqid, snvs, selected, order)
+                rows, sites = _write_sequence(out, kind, seqid, snvs, selected, order, reference)
                 n_rows += rows
                 n_sites += sites
                 log.info("%s: %d transcripts, %d SNVs", seqid, len(tids), sites)
@@ -260,6 +182,7 @@ def _write_sequence(
     snvs: dict[str, TranscriptSnvs],
     transcripts: dict[str, Transcript],
     order: dict[str, int],
+    reference: Reference,
 ) -> tuple[int, int]:
     """Write the SNVs of one sequence sorted by position and ALT; return (rows, sites)."""
     tids = list(snvs)
@@ -273,6 +196,7 @@ def _write_sequence(
     pos, ref, alt = columns["pos"][sort], columns["ref"][sort], columns["alt"][sort]
     protein_pos, ref_aa, alt_aa = (columns[k][sort] for k in ("protein_pos", "ref_aa", "alt_aa"))
     score, owner = columns["score"][sort], owner[sort]
+    percentile = reference.percentile(score)
 
     labels = {}
     for i, t in by_order.items():
@@ -295,7 +219,7 @@ def _write_sequence(
             variant = f"{AMINO_ACIDS[ref_aa[k]]}{protein_pos[k]}{AMINO_ACIDS[alt_aa[k]]}"
             lines.append(
                 f"{seqid}\t{pos[k]}\t{_BASES[ref[k]]}\t{_BASES[alt[k]]}\t{gene}\t{transcript}"
-                f"\t{canonical}\t{variant}\t{score[k]:.4f}\n"
+                f"\t{canonical}\t{variant}\t{score[k]:.4f}\t{percentile[k]:.3f}\n"
             )
             flush()
         n_sites = int(np.count_nonzero(np.diff(pos * 4 + alt, prepend=-1)))
@@ -314,9 +238,10 @@ def _write_sequence(
                     f"|{AMINO_ACIDS[ref_aa[k]]}|{AMINO_ACIDS[alt_aa[k]]}|{score[k]:.3f}||ok"
                 )
             lowest = float(score[start:end].min())
+            lowest_pct = float(np.float32(percentile[start:end].min()))
             lines.append(
                 f"{seqid}\t{pos[start]}\t.\t{_BASES[ref[start]]}\t{_BASES[alt[start]]}\t.\t.\t"
-                f"OMS={','.join(entries)};OMS_WT={lowest:g}\n"
+                f"OMS={','.join(entries)};OMS_WT={lowest:g};OMS_WT_PCT={lowest_pct:g}\n"
             )
             n_sites += 1
             start = end

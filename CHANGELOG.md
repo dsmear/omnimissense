@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Proteome-wide percentile** of the score: `OMS_WT_PCT` (VCF) and `wt_percentile` (TSV,
+  last column) in `annotate`; `OMS_WT_PCT` and `oms_wt_percentile` in `export-variants`. The
+  percent of all possible missense SNVs of the canonical transcripts with a more damaging
+  score; built once by `precompute` (or `export-variants`) and stored in the cache. Existing
+  fields and columns are unchanged.
+
 ## 0.3.0 — 2026-11-26
 
 Any genome: NCBI and prokaryotic annotations, any genetic code, mitochondria, and a

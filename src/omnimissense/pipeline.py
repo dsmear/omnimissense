@@ -25,6 +25,7 @@ from omnimissense.fasta import prepare_fasta
 from omnimissense.genetic_code import STANDARD, CodeAssignment
 from omnimissense.gff import Transcript, prepare_annotation, read_transcripts
 from omnimissense.proteome import Protein, ProteinStatus, build_proteome
+from omnimissense.reference import build_reference, load_reference, reference_key, save_reference
 from omnimissense.scoring import MaskedLMScorer
 from omnimissense.sequences import AA_INDEX
 
@@ -54,6 +55,7 @@ TSV_COLUMNS = (
     "wt_marginal",
     "masked_marginal",
     "status",
+    "wt_percentile",
 )
 
 
@@ -83,6 +85,7 @@ class ScoredVariant:
     n_windows: int | None = None
     wt_marginal: float | None = None
     masked_marginal: float | None = None
+    wt_percentile: float | None = None  # proteome-wide percentile of wt_marginal
 
 
 @dataclass
@@ -229,6 +232,25 @@ def score_variants(
         variant.masked_marginal = float(vector[AA_INDEX[variant.consequence.alt_aa]])
 
 
+def add_percentiles(variants: Iterable[ScoredVariant], cache: ScoreCache, key: str) -> bool:
+    """Fill ``wt_percentile`` from the proteome-wide reference, if it was built."""
+    reference = load_reference(cache.directory, key)
+    scored = [v for v in variants if v.wt_marginal is not None]
+    if reference is None:
+        if scored:
+            log.warning(
+                "No percentile reference for this genome annotation and model: OMS_WT_PCT "
+                "left empty. Run `omnimissense precompute` once (same FASTA, GFF3, model and "
+                "genetic codes) to build it"
+            )
+        return False
+    for variant, value in zip(
+        scored, reference.percentile([v.wt_marginal for v in scored]), strict=True
+    ):
+        variant.wt_percentile = float(value)
+    return True
+
+
 # ---------------------------------------------------------------------------- annotate
 
 
@@ -335,7 +357,7 @@ def _output_mode(path: Path) -> str:
     return "w"
 
 
-ANNOTATION_TAGS = ("BCSQ", "OMS", "OMS_WT", "OMS_MM", "OMS_REF_MISMATCH")
+ANNOTATION_TAGS = ("BCSQ", "OMS", "OMS_WT", "OMS_WT_PCT", "OMS_MM", "OMS_REF_MISMATCH")
 
 _INFO_DEFINITIONS = {
     "OMS": (
@@ -349,6 +371,12 @@ _INFO_DEFINITIONS = {
         "A",
         "Float",
         "Lowest (most damaging) wild-type-marginal score across transcripts, per ALT allele",
+    ),
+    "OMS_WT_PCT": (
+        "A",
+        "Float",
+        "Proteome-wide percentile of OMS_WT: percent of all possible missense SNVs of the "
+        "canonical transcripts of this genome annotation with a lower (more damaging) score",
     ),
     "OMS_MM": (
         "A",
@@ -429,7 +457,11 @@ def write_vcf(
             if record_variants:
                 n_alts = len(record.alts or ())
                 record.info["OMS"] = tuple(_oms_entry(v) for v in record_variants)
-                for tag, attr in (("OMS_WT", "wt_marginal"), ("OMS_MM", "masked_marginal")):
+                for tag, attr in (
+                    ("OMS_WT", "wt_marginal"),
+                    ("OMS_WT_PCT", "wt_percentile"),
+                    ("OMS_MM", "masked_marginal"),
+                ):
                     values = _per_allele_min(record_variants, n_alts, attr)
                     if values is not None:
                         record.info[tag] = values
@@ -461,6 +493,7 @@ def write_tsv(path: Path, variants: Iterable[ScoredVariant]) -> None:
                     _fmt(v.wt_marginal),
                     _fmt(v.masked_marginal),
                     v.status.value,
+                    _fmt(v.wt_percentile, 3),
                 ]
             )
 
@@ -614,6 +647,7 @@ def annotate(
         proteins = build_proteome(fasta, transcripts, needed)
         classify_variants(variants, transcripts, proteins)
         score_variants(variants, proteins, cache, scorer_factory, masked=masked)
+        add_percentiles(variants, cache, reference_key(gff3, fasta, annotation.codes))
 
         output_vcf.parent.mkdir(parents=True, exist_ok=True)
         mismatch_indices = {m.index for m in ref_mismatches}
@@ -636,6 +670,7 @@ class PrecomputeResult:
     residues_scored: int
     seconds: float
     status_counts: Counter[str]
+    reference_snvs: int = 0  # SNVs in the percentile reference (0: already built)
 
 
 def precompute(
@@ -649,7 +684,8 @@ def precompute(
     genetic_code: int | None = None,
     mito_genetic_code: int | None = None,
 ) -> PrecomputeResult:
-    """Compute and cache wild-type marginals for every protein of an annotation."""
+    """Compute and cache wild-type marginals for every protein of an annotation, then the
+    proteome-wide percentile reference (``omnimissense.reference``)."""
     fasta = prepare_fasta(fasta)
     with tempfile.TemporaryDirectory(prefix="omnimissense-") as tmp:
         annotation = prepare_annotation(gff3, Path(tmp), genetic_code, mito_genetic_code)
@@ -667,15 +703,24 @@ def precompute(
         len(todo),
     )
     start = time.perf_counter()
-    cached_wt_scores(
-        todo, cache, LazyScorer(scorer_factory), chunk_size=chunk_size, progress=progress
-    )
+    scorer = LazyScorer(scorer_factory)
+    cached_wt_scores(todo, cache, scorer, chunk_size=chunk_size, progress=progress)
+    seconds = time.perf_counter() - start
+    key = reference_key(gff3, fasta, annotation.codes)
+    reference_snvs = 0
+    if load_reference(cache.directory, key) is None:
+        reference = build_reference(
+            fasta, transcripts, proteins, lambda seqs: cached_wt_scores(seqs, cache, scorer)
+        )
+        save_reference(cache.directory, key, reference)
+        reference_snvs = reference.n_snvs
     return PrecomputeResult(
         n_transcripts=len(proteins),
         n_unique_proteins=len(sequences),
         n_already_cached=len(cached),
         n_scored=len(todo),
         residues_scored=sum(len(s) for s in todo.values()),
-        seconds=time.perf_counter() - start,
+        seconds=seconds,
         status_counts=status_counts,
+        reference_snvs=reference_snvs,
     )
