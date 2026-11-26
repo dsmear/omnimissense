@@ -143,15 +143,21 @@ EXCLUDED = {"Modifier of copper toxicosis"}
 PATHOGENIC_CLASSES = {"P", "LP", "LP/P"}
 
 
-def read_omia(path: Path) -> list[dict[str, str]]:
-    """Dog missense records of the OMIA variant CSV, with a ``category``.
+def read_omia(
+    path: Path,
+    species: str = "dog",
+    traits: set[str] = TRAITS,
+    excluded: set[str] = EXCLUDED,
+) -> list[dict[str, str]]:
+    """Missense records of one species in the OMIA variant CSV, with a ``category``.
 
-    Categories: ``pathogenic`` (AVCG P/LP), ``disease_unclassified``, ``trait``.
+    Categories: ``pathogenic`` (AVCG P/LP), ``disease_unclassified``, ``trait`` (phenotypes
+    listed in ``traits``); phenotypes in ``excluded`` are left out.
     """
     records = []
     with path.open(newline="", encoding="utf-8-sig") as handle:
         for row in csv.DictReader(handle):
-            if row["Species Name"].strip() != "dog":
+            if row["Species Name"].strip() != species:
                 continue
             if row["Variant Effect"].strip() != "missense":
                 continue
@@ -159,9 +165,9 @@ def read_omia(path: Path) -> list[dict[str, str]]:
             classification = row["Pathogenicity Classification"].strip()
             if classification in PATHOGENIC_CLASSES:
                 category = "pathogenic"
-            elif classification == "Not currently evaluated" and phenotype in TRAITS:
+            elif classification == "Not currently evaluated" and phenotype in traits:
                 category = "trait"
-            elif classification == "Not currently evaluated" and phenotype not in EXCLUDED:
+            elif classification == "Not currently evaluated" and phenotype not in excluded:
                 category = "disease_unclassified"
             else:
                 continue

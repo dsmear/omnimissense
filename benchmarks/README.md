@@ -144,3 +144,56 @@ masked marginals against ProteinGym's own ESM-2 scores on every single-window as
 are appended per assay to `results/proteingym_all_<model>.tsv` (an interrupted run resumes;
 delete the file to start over) and summarised in `results/proteingym_all_<model>.summary.tsv`.
 Same data and pinned revisions as section 1.
+
+## 6. Chicken: far from human (OMIA causal variants vs common EVA variants)
+
+Chicken and human last shared an ancestor more than 300 million years ago (dog and human:
+about 90). Same design as section 2, plus the human-ortholog comparison of section 3.
+
+**Step 1 — download the OMIA variant table by hand** (as in section 2):
+
+1. open <https://omia.org/results/?search_type=advanced&result_type=variant&singlelocus=yes&characterised=yes&species_id=9031>
+2. click the link to download the table as CSV
+3. save it as `data/omia/omia_chicken_variants.csv`
+
+**Step 2 — run:**
+
+```bash
+uv run --group benchmarks python benchmarks/chicken_omia.py
+```
+
+The script downloads the Ensembl 116 chicken assembly (GRCg7b, ~0.35 GB) and reads the
+EVA population VCF remotely, sequence by sequence (only the coding sequence of the selected
+genes; the 12 GB file is not downloaded; pass `--population-vcf <path>` to use a local
+copy). The human-ortholog methods use the AlphaMissense and UniProt files of section 3; if
+they are missing, they are skipped with a warning.
+
+- **Causal sets:** OMIA chicken variants whose effect is "missense", mapped to GRCg7b
+  proteins by gene symbol and amino-acid change (the reference residue must match; canonical
+  transcript tried first). `disease` = phenotypes other than traits; `trait` = plumage,
+  skin, comb and eggshell phenotypes (listed explicitly in the script).
+- **Common set:** PASS biallelic SNVs whose ALT allele frequency is ≥ 5% among the 96
+  Bangladeshi native chickens of EVA study PRJEB78357 (three varieties, improved and
+  unimproved lines, 16 birds each; GRCg7b, autosomes), missense in the canonical transcript
+  of (a) the genes of the causal set and (b) 500 autosomal protein-coding genes drawn at
+  random (seed 0) minus the causal genes. Variants present in both sets are dropped from the
+  common set. Z-linked causal genes have no same-gene common variants (the VCF has autosomes
+  only).
+- **Methods:** the model on the chicken protein (masked and wild-type marginal), the same
+  model on the human ortholog, AlphaMissense (human ortholog; mapping as in section 3) and
+  BLOSUM62. AUROC with a 95% stratified bootstrap interval on all variants (a variant the
+  human methods cannot map counts as least damaging for them; causal variants map more often
+  than common ones, so this favours the human methods) and on the subset scored by every
+  method (the fair comparison), with paired bootstrap intervals for the chicken-vs-human
+  differences.
+- **Percentiles:** percentile of each variant among the 19 × L substitutions of its protein
+  and, if `omnimissense precompute` was run on the same FASTA and GFF3 (no other options),
+  the proteome-wide percentile (`OMS_WT_PCT`) of causal and common variants.
+
+**Data sources and terms**
+
+- OMIA: as in section 2.
+- Bangladeshi native chickens: EVA study PRJEB78357, *Whole Genome Sequencing of Bangladeshi
+  Native Chicken*, <https://www.ebi.ac.uk/eva/?eva-study=PRJEB78357>. Variants are read to
+  compute aggregate metrics only; nothing is redistributed.
+- Ensembl release 116, *Gallus gallus* (bGalGal1.mat.broiler.GRCg7b, GCA_016699485.1).
