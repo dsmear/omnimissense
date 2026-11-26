@@ -11,6 +11,7 @@ repos:
       - id: check-yaml
       - id: end-of-file-fixer
       - id: trailing-whitespace
+        exclude: \.tsv$ # a trailing tab is an empty last field
 
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.17.6

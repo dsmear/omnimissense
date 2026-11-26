@@ -3,7 +3,7 @@ omia_mapped	22
 omia_reference_genome_carries_alt	4
 omia_no_single_protein_change	1
 omia_mapped_unique	21
-omia_genes_without_symbol
+omia_genes_without_symbol	
 causal_pathogenic	3
 causal_disease	4
 causal_trait	17
