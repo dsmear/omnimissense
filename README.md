@@ -204,15 +204,15 @@ flagged `pseudo=true` by NCBI: a disrupted gene). Only `ok` rows are scored.
 | Wild-type marginals, 650M model fp16 (ESM-2 and VESM have the same size) | ~12,400 residues/s, 1.6 GiB peak VRAM |
 | Whole dog proteome (`precompute`, ESM-2) | 43,092 unique proteins, 26.7 M residues in 36 min; cache 1.4 GB |
 | Masked marginals (`--masked`) | 15–28 positions/s, depending on protein length |
-| Annotate 127,270 dog variants (chr38, 0–5 Mb; 1,689 missense consequences), default settings | 25 s on first run, 12 s when the proteins are cached (1.2 GB RAM) |
+| Annotate 127,270 dog variants (chr38, 0–5 Mb; 1,689 missense consequences), default settings | 13.5 s when the proteins are cached (25 s on a first run with 0.2.0; 1.2 GB RAM) |
 | Same, with `--masked` (ESM-2) | 137 s on first run, 13 s when cached |
-| Proteome translation | ~10 s (after the one-off BGZF conversion of the genome, ~3 min) |
+| Proteome translation (dog) | 22 s (after the one-off BGZF conversion of the genome, ~3 min) |
+| Percentile reference (dog, scores cached) | 50 s for 73.9 M values (`precompute` with nothing left to score: 73 s) |
 | `export-variants`, from cached scores (4 CPU cores, no GPU) | *E. coli* 8.6 M SNVs in 49 s; yeast 19.3 M SNVs in 1–2 min |
 | ProteinGym, all 217 assays, wild-type marginals | ~15 s of GPU per model |
 
-The dog annotation and translation times were measured with version 0.2.0. Since 0.3.0 the
-GFF3 is also parsed by csq and scanned once more (prokaryotic layout, genetic codes); these
-times have not been re-measured.
+Dog annotation, translation and percentile-reference times were measured with the current
+version; the model and `precompute` throughput rows with 0.2.0 (the scoring has not changed).
 
 ## Validation
 
