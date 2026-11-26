@@ -229,7 +229,7 @@ class Annotation:
 
 _GTF_ATTRIBUTE = re.compile(r'(\w+)\s+(?:"([^"]*)"|([^;\s]+))')
 #: CDS attributes carried over from a GTF file (used downstream: genetic code, recoding).
-_GTF_CDS_KEYS = ("transl_table", "transl_except", "pseudo", "protein_id")
+_GTF_CDS_KEYS = ("transl_table", "transl_except", "pseudo", "protein_id", "locus_tag")
 
 
 def is_gtf(path: Path) -> bool:

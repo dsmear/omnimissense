@@ -238,6 +238,8 @@ do).
   directly from genes; 4,300 / 4,300 proteins identical to NCBI's translation (table 11 from
   the GFF3), including the programmed frameshifts of *prfB*, *dnaX* and *copA* and the 3
   selenoproteins (selenocysteine from `transl_except`). Not scored: 18 NCBI pseudogenes.
+- **GTF input:** the NCBI GTF of the same yeast assembly gives the same 6,021 / 6,021
+  proteins and identical `annotate` results as its GFF3.
 - **Genome-coordinate export** (`export-variants`): on every possible SNV of all CDS bases of
   300 random transcripts, the exported rows equal `annotate`'s scored consequences (yeast
   955,675 / 955,675, *E. coli* 624,682 / 624,682; same transcripts, positions, amino acids and

@@ -21,7 +21,9 @@
   a change of protein length.
 - **GTF annotations** (Ensembl, GENCODE, NCBI, AUGUSTUS/BRAKER) are accepted wherever a GFF3
   is: converted internally to GFF3, with the stop codon merged back into the CDS and the
-  biotypes, tags and CDS attributes (`transl_table`, `transl_except`, `pseudo`) kept.
+  biotypes, tags and CDS attributes (`transl_table`, `transl_except`, `pseudo`, `locus_tag`)
+  kept. Yeast NCBI GTF: same 6,021 / 6,021 proteins and identical `annotate` results as the
+  GFF3.
 
 - **Faster cache lookups**: an index of where each protein is stored replaces row-group
   statistics, which could not skip anything (hashes are random, so every row group spans
