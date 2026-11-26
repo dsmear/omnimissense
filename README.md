@@ -193,6 +193,23 @@ percentile within each protein was considered and rejected: it discards what sep
 genes (dog pathogenic variants sit at a median 34th percentile of their own protein, while
 the raw score separates them from common variants with AUROC 0.977).
 
+**Reading the percentile.** Share of variants below each percentile in the chicken benchmark
+(VESM 650M; [Validation](#validation)):
+
+| `OMS_WT_PCT` below | all possible missense changes | OMIA causal variants (21) | common variants, AF ≥ 5% (1,817) |
+|---|---|---|---|
+| 5 | 5% | 10% | 0% |
+| 10 | 10% | 29% | 0.1% |
+| 20 | 20% | 43% | 0.6% |
+| 30 | 30% | 48% | 1.6% |
+| 50 | 50% | 67% | 8.1% |
+
+Causal variants need not be extreme: half of them are below the 30th percentile, where only
+1.6% of common variants fall. Common variants are an easy negative set (selection has removed
+damaging alleles from high frequency): rare harmless variants score lower on average, so a
+threshold flags more of them than this table suggests. Use the percentile to rank, not as a
+verdict.
+
 **Status values:** `ok`, `ref_aa_mismatch` (csq and the translated protein disagree),
 `multi_aa_change` (the change alters the protein length), `nonstandard_aa`, `protein_unavailable`
 (e.g. internal stop codon), `mitochondrial_skipped` (see limitations), `pseudogene` (CDS
