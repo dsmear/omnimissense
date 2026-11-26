@@ -120,3 +120,24 @@ def test_write_fasta_skips_invalid_proteins(synthetic, tmp_path) -> None:
     output = tmp_path / "out.fa"
     assert write_fasta(proteins.values(), output) == 2
     assert output.read_text().startswith(">TXA\nMKRWLEHC\n")
+
+
+def test_incomplete_5prime_from_the_gff3_survives_csq_trimming(tmp_path) -> None:
+    # csq's dump trims a 5' partial codon and resets the phase to 0; the transcript must
+    # still be known as 5'-incomplete, so its first codon (CTG) is not read as a start.
+    genome = tmp_path / "partial.fa"
+    genome.write_text(">1\nGGCTGAAACTGTAAGG\n")  # CDS 1..14 with phase 2 -> CTG AAA CTG TAA
+    gff3 = tmp_path / "partial.gff3"
+    rows = [
+        ("gene", ".", "ID=gene:G;biotype=protein_coding"),
+        ("mRNA", ".", "ID=transcript:T;Parent=gene:G;biotype=protein_coding"),
+        ("CDS", "2", "Parent=transcript:T"),
+    ]
+    gff3.write_text(
+        "".join("\t".join(["1", "t", f, "1", "14", ".", "+", p, a]) + "\n" for f, p, a in rows)
+    )
+    fasta = prepare_fasta(genome)
+    transcripts = read_transcripts(gff3, fasta)
+    assert transcripts["T"].cds_in_transcript_order()[0].phase == 0  # as csq wrote it
+    assert transcripts["T"].incomplete_5prime and not transcripts["T"].complete_5prime
+    assert build_proteome(fasta, transcripts)["T"].sequence == "LKL"

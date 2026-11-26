@@ -34,7 +34,9 @@ FastaOption = Annotated[
 Gff3Option = Annotated[
     Path,
     typer.Option(
-        exists=True, dir_okay=False, help="GFF3 annotation (Ensembl or NCBI RefSeq layout)."
+        exists=True,
+        dir_okay=False,
+        help="GFF3 annotation (Ensembl, NCBI RefSeq, Prokka or Bakta layout).",
     ),
 ]
 
@@ -254,6 +256,50 @@ def export(
     typer.echo(f"Transcripts:      {result.n_transcripts}")
     typer.echo(f"Unique proteins:  {result.n_unique_proteins} ({result.n_residues} residues)")
     typer.echo(f"Written to {output}")
+
+
+@app.command("export-variants")
+def export_variants(
+    fasta: FastaOption,
+    gff3: Gff3Option,
+    output: Annotated[
+        Path,
+        typer.Option(
+            "--output",
+            "-o",
+            help="Output file: .vcf.gz (INFO tags of annotate, for bcftools annotate or VEP "
+            "--custom) or .tsv.gz (one row per SNV and transcript); tabix-indexed.",
+        ),
+    ],
+    model: ModelOption = DEFAULT_MODEL,
+    cache_dir: CacheOption = None,
+    all_transcripts: Annotated[
+        bool,
+        typer.Option(help="Export all coding transcripts, not only the canonical ones."),
+    ] = False,
+    device: DeviceOption = None,
+    max_tokens: MaxTokensOption = DEFAULT_MAX_TOKENS,
+    genetic_code: GeneticCodeOption = None,
+    mito_genetic_code: MitoGeneticCodeOption = None,
+) -> None:
+    """Write every possible missense SNV of the coding transcripts, at genome coordinates,
+    with its score (wild-type marginal): annotate any VCF later without a GPU."""
+    from omnimissense.variant_export import export_variants as run_export
+
+    result = run_export(
+        fasta,
+        gff3,
+        output,
+        cache=_cache(cache_dir, model),
+        scorer_factory=_scorer_factory(model, device, max_tokens),
+        model_name=model,
+        all_transcripts=all_transcripts,
+        genetic_code=genetic_code,
+        mito_genetic_code=mito_genetic_code,
+    )
+    typer.echo(f"Transcripts:   {result.n_transcripts}")
+    typer.echo(f"Missense SNVs: {result.n_sites} ({result.n_rows} SNV x transcript)")
+    typer.echo(f"Written to {result.output} (+ index)")
 
 
 @app.command()

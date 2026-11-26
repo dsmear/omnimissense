@@ -22,6 +22,12 @@
   a transcript feature get one (`tx-<CDS ID>`, plus `gene-<CDS ID>` when the CDS has no
   parent) in a normalized copy of the GFF3, which bcftools csq and the translation read; an
   embedded `##FASTA` section (Prokka, Bakta), which made csq fail, is dropped.
+- **`omnimissense export-variants`**: every possible missense SNV of the coding transcripts at
+  genome coordinates with its score, as a tabix-indexed VCF (`OMS`/`OMS_WT`, for
+  `bcftools annotate` or VEP `--custom`) or TSV; equal to `annotate` on every SNV tested.
+- Fixed: a CDS starting inside a codon (non-zero first phase) lost that information in
+  csq's dump (which trims the partial codon and resets the phase); it is now taken from the
+  GFF3, so such a first codon is never read as an initiation codon.
 - New status `pseudogene`: CDS flagged `pseudo=true` (NCBI) are neither translated nor scored
   (previously, interrupted pseudogenes that happened to translate were scored as proteins).
 

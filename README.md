@@ -80,7 +80,35 @@ uv run omnimissense annotate --vcf my_dogs.vcf.gz --fasta $FASTA --gff3 $GFF3 \
 
 # optional: all scores of all coding transcripts in one Parquet file
 uv run omnimissense export --fasta $FASTA --gff3 $GFF3 -o dog_scores.parquet
+
+# optional: every possible missense SNV at genome coordinates (no GPU needed afterwards)
+uv run omnimissense export-variants --fasta $FASTA --gff3 $GFF3 -o dog_snvs.vcf.gz
 ```
+
+### Annotating without a GPU
+
+`export-variants` writes every possible missense SNV of the canonical coding transcripts
+(`--all-transcripts`: all of them) with its score, at genome coordinates, tabix-indexed:
+
+- `.vcf.gz`: one record per SNV with the same `OMS` / `OMS_WT` tags as `annotate`;
+- `.tsv.gz`: one row per SNV and transcript (`#CHROM POS REF ALT gene transcript canonical
+  protein_variant oms_wt`), for R, pandas or `bcftools annotate -c`.
+
+Any VCF can then be annotated with bcftools alone, in seconds. Split multi-allelic records
+first: `bcftools annotate` matches one annotation record per VCF record, so without the split
+only one ALT of a multi-allelic record gets its score.
+
+```bash
+bcftools norm -m -any my_dogs.vcf.gz -W -Oz -o my_dogs.split.vcf.gz
+bcftools annotate -a dog_snvs.vcf.gz -c INFO/OMS,INFO/OMS_WT my_dogs.split.vcf.gz -Oz -o my_dogs.oms.vcf.gz
+```
+
+The result is identical to `omnimissense annotate` for SNVs (checked on every SNV of 300
+random genes in yeast and in *E. coli*; see Validation). `annotate` is still needed for
+masked marginals and for what the file does not hold: MNVs, and transcripts that are not
+exported. Changes of a start codon (start lost) or to a stop codon are not missense and are
+not in the file. Sizes: *E. coli* 8.6 M SNVs, 96 MB (VCF) in 49 s; yeast (all transcripts)
+19.3 M SNVs, 216 MB (VCF) or 153 MB (TSV) in 1–2 min, from cached scores.
 
 The plain-gzip FASTA distributed by Ensembl is recompressed once to BGZF (`.fa.bgz`) next to
 the original, because random access needs it.
@@ -172,6 +200,12 @@ do).
   directly from genes; 4,297 / 4,297 proteins identical to NCBI's translation (table 11 from
   the GFF3), including the programmed frameshifts of *prfB*, *dnaX* and *copA*. Not scored:
   18 NCBI pseudogenes and 3 selenoproteins.
+- **Genome-coordinate export** (`export-variants`): on every possible SNV of all CDS bases of
+  300 random transcripts, the exported rows equal `annotate`'s scored consequences (yeast
+  955,675 / 955,675, *E. coli* 624,682 / 624,682; same transcripts, positions, amino acids and
+  scores), and `bcftools annotate` with the exported VCF reproduces `annotate`'s `OMS` and
+  `OMS_WT` tags exactly. Unit test: every SNV of the synthetic genome, both strands, codons
+  split by introns, a 5'-incomplete CDS, a mitochondrial gene (table 2).
 - **Genetic codes:** the 26 tables are bcftools csq's own (copied from its source), checked
   against Biopython's NCBI tables and, for every table, against the amino acids csq reports
   for every codon (`tests/test_genetic_code*.py`).

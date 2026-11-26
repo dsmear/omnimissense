@@ -74,11 +74,19 @@ class Transcript:
     genetic_code: int | None = STANDARD
     #: The CDS is flagged ``pseudo=true`` (NCBI): a disrupted gene, not a protein.
     pseudo: bool = False
+    #: The GFF3 gives the 5'-most CDS a non-zero phase (the CDS starts inside a codon).
+    #: csq's dump trims that partial codon and resets the phase, so it is kept here.
+    incomplete_5prime: bool = False
     cds: list[CdsSegment] = field(default_factory=list)
 
     def cds_in_transcript_order(self) -> list[CdsSegment]:
         """CDS segments in the order they are read (5' to 3' of the transcript)."""
         return sorted(self.cds, key=lambda s: s.start, reverse=self.strand == "-")
+
+    @property
+    def complete_5prime(self) -> bool:
+        """The CDS starts at its first codon (a real initiation codon, not a fragment)."""
+        return not self.incomplete_5prime and (self.cds_in_transcript_order()[0].phase or 0) == 0
 
     @property
     def cds_length(self) -> int:
@@ -364,19 +372,31 @@ def _write_normalized(
 
 
 def _add_source_attributes(path: Path, transcripts: dict[str, Transcript]) -> dict[str, bool]:
-    """Set biotype, gene name, canonical tag and pseudo flag from the original GFF3.
+    """Set biotype, gene name, canonical tag, pseudo flag and 5' completeness from the GFF3.
 
     Returns ``{gene_id: True}`` for genes with a canonical-tagged transcript (coding or not).
     """
     gene_ids = {tx.gene_id for tx in transcripts.values()}
     gene_names: dict[str, str] = {}
     tagged_genes: dict[str, bool] = {}
-    for _seqid, _source, feature, *_rest, attr_text in _features(path):
+    first_cds: dict[str, tuple[int, int]] = {}  # transcript -> (5' coordinate, phase)
+    for row in _features(path):
+        feature, start, end, strand, phase, attr_text = (row[i] for i in (2, 3, 4, 6, 7, 8))
         attributes = parse_attributes(attr_text)
-        if feature == "CDS" and attributes.get("pseudo") == "true":
+        if feature == "CDS":
+            five_prime = int(start) if strand != "-" else -int(end)
             for parent in attributes.get("Parent", "").split(","):
-                if csq_id(parent) in transcripts:
-                    transcripts[csq_id(parent)].pseudo = True
+                transcript = transcripts.get(csq_id(parent))
+                if transcript is None:
+                    continue
+                if attributes.get("pseudo") == "true":
+                    transcript.pseudo = True
+                current = first_cds.get(transcript.transcript_id)
+                if current is None or five_prime < current[0]:
+                    first_cds[transcript.transcript_id] = (
+                        five_prime,
+                        int(phase or 0) if phase.isdigit() else 0,
+                    )
         feature_id = attributes.get("ID")
         if not feature_id:
             continue
@@ -393,6 +413,7 @@ def _add_source_attributes(path: Path, transcripts: dict[str, Transcript]) -> di
             gene_names[key] = attributes.get("Name", "")
     for transcript in transcripts.values():
         transcript.gene_name = gene_names.get(transcript.gene_id, "")
+        transcript.incomplete_5prime = first_cds.get(transcript.transcript_id, (0, 0))[1] != 0
     return tagged_genes
 
 

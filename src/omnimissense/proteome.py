@@ -63,8 +63,7 @@ def translate_transcript(fasta: pysam.FastaFile, transcript: Transcript) -> Prot
     protein = translate(cds, code.id)
     if protein and cds[3 * len(protein) - 3 : 3 * len(protein)] in code.stops:
         protein = protein[:-1]  # terminal stop, also where it codes for Q/E inside a CDS
-    complete_5prime = (transcript.cds_in_transcript_order()[0].phase or 0) == 0
-    if protein and complete_5prime and cds[:3] in code.starts:
+    if protein and transcript.complete_5prime and cds[:3] in code.starts:
         protein = "M" + protein[1:]
     status = ProteinStatus.INTERNAL_STOP if "*" in protein else ProteinStatus.OK
     return Protein(transcript.transcript_id, protein, status)
