@@ -395,6 +395,36 @@ What this says:
 - Viral proteins are scored less reliably than cellular ones (ProteinGym: VESM 0.43 on
   viruses vs 0.47–0.52 elsewhere; alignment-based methods ≈0.47 on viruses).
 
+## Compatibility
+
+Before 1.0 these are rules the project follows, not yet guarantees; 1.0 will make them
+guarantees.
+
+**Kept stable across 0.x versions** (a change needs a deprecation note in the changelog and a
+new minor version):
+
+- command names and their options: `annotate`, `precompute`, `export`, `export-variants`,
+  `proteome`, `doctor`;
+- VCF `INFO` tags (`OMS`, `OMS_WT`, `OMS_WT_PCT`, `OMS_MM`, `OMS_REF_MISMATCH`) and the order
+  of the 10 fields of an `OMS` entry; new information comes as new tags;
+- TSV columns of `annotate` and `export-variants`: append-only (new columns at the end,
+  existing names and positions unchanged);
+- status values keep their meaning (new ones can be added);
+- the definition of the scores (log-likelihood ratios, wild-type and masked marginals, the
+  long-protein windows).
+
+**Not stable:** the Python API (modules and functions are internal), log messages, and the
+on-disk cache layout. The cache is versioned (`<cache>/v1/…`): a change in how scores are
+computed bumps the version, so an old cache is recomputed, never misread. The percentile
+reference is keyed by the annotation, genome and genetic codes.
+
+**Reproducibility.** Scores depend on the model (with its pinned revision), the genome, the
+annotation, the genetic codes and the omnimissense version; output VCFs record the version and
+the model (`##omnimissenseVersion`, `##omnimissenseModel`), `export` files all of them.
+`pysam` is pinned to the 0.24 series (bcftools 1.24), because omnimissense relies on bcftools
+csq's genetic-code tables and `--dump-gff` format; the pin moves only after the test suite
+passes on a new version.
+
 ## Installation (development)
 
 Requires [uv](https://docs.astral.sh/uv/).

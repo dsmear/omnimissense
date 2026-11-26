@@ -23,6 +23,11 @@
   is: converted internally to GFF3, with the stop codon merged back into the CDS and the
   biotypes, tags and CDS attributes (`transl_table`, `transl_except`, `pseudo`) kept.
 
+- README: a **Compatibility** section (what stays stable across 0.x versions: commands and
+  options, `INFO` tags and `OMS` layout, append-only TSV columns, status values, score
+  definitions; what does not: Python API, logs, cache layout) and a note that VESM's training
+  uses no ProteinGym or other experimental labels.
+
 ## 0.3.0 — 2026-11-26
 
 Any genome: NCBI and prokaryotic annotations, any genetic code, mitochondria, and a
