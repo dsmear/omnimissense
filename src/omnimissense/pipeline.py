@@ -62,7 +62,7 @@ TSV_COLUMNS = (
 class VariantStatus(StrEnum):
     OK = "ok"
     REF_AA_MISMATCH = "ref_aa_mismatch"
-    MULTI_AA = "multi_aa_change"
+    MULTI_AA = "multi_aa_change"  # residues inserted or deleted: not scored
     NONSTANDARD_AA = "nonstandard_aa"
     PROTEIN_UNAVAILABLE = "protein_unavailable"
     MITOCHONDRIAL = "mitochondrial_skipped"
@@ -114,12 +114,13 @@ def classify(consequence: Consequence, protein: Protein | None) -> VariantStatus
         return VariantStatus.PSEUDOGENE
     if protein.status is not ProteinStatus.OK:
         return VariantStatus.PROTEIN_UNAVAILABLE
-    if len(consequence.ref_aa) != 1 or len(consequence.alt_aa) != 1:
+    if len(consequence.ref_aa) != len(consequence.alt_aa):
         return VariantStatus.MULTI_AA
-    position = consequence.protein_pos
-    if position > len(protein.sequence) or protein.sequence[position - 1] != consequence.ref_aa:
+    start = consequence.protein_pos - 1
+    if protein.sequence[start : start + len(consequence.ref_aa)] != consequence.ref_aa:
         return VariantStatus.REF_AA_MISMATCH
-    if consequence.ref_aa not in AA_INDEX or consequence.alt_aa not in AA_INDEX:
+    changed = consequence.substitutions
+    if not changed or any(r not in AA_INDEX or a not in AA_INDEX for _, r, a in changed):
         return VariantStatus.NONSTANDARD_AA
     return VariantStatus.OK
 
@@ -216,20 +217,31 @@ def score_variants(
         variant.protein_length = len(protein.sequence)
         sequences[protein.seq_hash] = protein.sequence
 
+    # A change of several residues (an MNV over two codons) scores the sum of its single
+    # substitutions, as ProteinGym does for multiple mutants with these models.
     wt = cached_wt_scores(sequences, cache, scorer)
     for variant in ok:
         matrix, n_windows = wt[variant.seq_hash]
-        alt = AA_INDEX[variant.consequence.alt_aa]
-        variant.wt_marginal = float(matrix[variant.consequence.protein_pos - 1, alt])
+        variant.wt_marginal = float(
+            sum(matrix[pos - 1, AA_INDEX[alt]] for pos, _, alt in variant.consequence.substitutions)
+        )
         variant.n_windows = n_windows
 
     if not masked:
         return
-    queries = {(v.seq_hash, v.consequence.protein_pos): sequences[v.seq_hash] for v in ok}
+    queries = {
+        (v.seq_hash, pos): sequences[v.seq_hash]
+        for v in ok
+        for pos, _, _ in v.consequence.substitutions
+    }
     mm = cached_masked_scores(queries, cache, scorer)
     for variant in ok:
-        vector = mm[(variant.seq_hash, variant.consequence.protein_pos)]
-        variant.masked_marginal = float(vector[AA_INDEX[variant.consequence.alt_aa]])
+        variant.masked_marginal = float(
+            sum(
+                mm[(variant.seq_hash, pos)][AA_INDEX[alt]]
+                for pos, _, alt in variant.consequence.substitutions
+            )
+        )
 
 
 def add_percentiles(variants: Iterable[ScoredVariant], cache: ScoreCache, key: str) -> bool:

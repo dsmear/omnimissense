@@ -84,6 +84,18 @@ class Consequence:
     def is_missense(self) -> bool:
         return "missense" in self.consequence.split("&")
 
+    @property
+    def substitutions(self) -> list[tuple[int, str, str]]:
+        """``(protein position, ref, alt)`` of every changed residue; an MNV over two codons
+        (``4WL>4CM``) gives two. Empty if the change alters the protein length."""
+        if len(self.ref_aa) != len(self.alt_aa):
+            return []
+        return [
+            (self.protein_pos + i, ref, alt)
+            for i, (ref, alt) in enumerate(zip(self.ref_aa, self.alt_aa, strict=True))
+            if ref != alt
+        ]
+
 
 def parse_bcsq(entry: str) -> Consequence | None:
     """Parse one INFO/BCSQ entry.

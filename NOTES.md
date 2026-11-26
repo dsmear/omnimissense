@@ -346,3 +346,14 @@ protein → writes them to the VCF `INFO` field.
 | `stop_codon` features merged into the CDS (adjacent or overlapping intervals joined), phases recomputed from the 5'-most CDS phase | GTF 2.2 CDS exclude the stop codon; GFF3 CDS include it. Merging makes GTF and GFF3 of the same genes identical (checked on the synthetic genome: same CDS segments, proteins and `annotate` results on both strands). A stop codon split over two exons stays a separate segment with its phase. |
 | Kept: gene name (`gene_name`, else `gene`), biotypes (`gene_biotype`/`gene_type`, `transcript_biotype`/`transcript_type`; NCBI's `mRNA` → `protein_coding`), transcript `tag`s (canonical), CDS `transl_table`, `transl_except`, `pseudo`, `protein_id` | Everything downstream reads. |
 | **To verify** on a real GTF: yeast R64 NCBI `GCF_000146045.2_R64_genomic.gtf.gz` vs the GFF3 proteome (6,021 identical to NCBI) | Requested from the user (NCBI not reachable from the container). |
+
+---
+
+## 2026-11-26 — Multi-residue changes (MNVs)
+
+| Decision | Rationale |
+|---|---|
+| Score an equal-length multi-residue missense change as the **sum of its single substitutions** (wild-type and masked marginals), skipping unchanged residues; every reference residue must match the protein | Checked how csq reports MNVs: one within a codon is an ordinary single change (`80TG>AC` → `4W>4T`, already scored); one over two codons is `82GC>TA` → `4WL>4CM`, previously `multi_aa_change` and unscored. The additive score is ProteinGym's convention for multiple mutants with single-sequence models, the one `benchmarks/proteingym_all.py` uses (1.77 M multiple mutants in the 217 assays). |
+| `multi_aa_change` now only for changes of protein length; in-frame indels stay unscored | csq calls in-frame indels `inframe_deletion`/`inframe_insertion`, not missense, so they never reach scoring; comparing sequences of different lengths is a different problem. |
+| The percentile of an MNV is the summed score placed on the single-SNV reference | Kept for ranking convenience; documented as an approximation (the reference holds single SNVs). |
+| Test: the synthetic MNV `4WL>4CM` gives exactly W4C + L5M (wild-type and masked) | |

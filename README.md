@@ -192,7 +192,7 @@ genes (dog pathogenic variants sit at a median 34th percentile of their own prot
 the raw score separates them from common variants with AUROC 0.977).
 
 **Status values:** `ok`, `ref_aa_mismatch` (csq and the translated protein disagree),
-`multi_aa_change` (several residues change), `nonstandard_aa`, `protein_unavailable`
+`multi_aa_change` (the change alters the protein length), `nonstandard_aa`, `protein_unavailable`
 (e.g. internal stop codon), `mitochondrial_skipped` (see limitations), `pseudogene` (CDS
 flagged `pseudo=true` by NCBI: a disrupted gene). Only `ok` rows are scored.
 
@@ -382,7 +382,10 @@ What this says:
   protein with an internal stop and is skipped (1 transcript in the dog).
 - Consequences are computed one record at a time: two nearby variants on the same haplotype
   that change the same codon are scored separately.
-- Variants changing several residues at once (MNVs) are reported but not scored.
+- A variant changing several residues at once (an MNV over two codons, e.g. `4WL>4CM`) is
+  scored as the sum of its single substitutions, as ProteinGym does for multiple mutants;
+  its percentile places that sum on the single-SNV scale. In-frame insertions and deletions
+  are not scored (csq reports them in `BCSQ`).
 - Scores are raw log-likelihood ratios, not calibrated probabilities of pathogenicity; the
   percentile gives them a genome-wide scale, not a probability either.
 - Viral proteins are scored less reliably than cellular ones (ProteinGym: VESM 0.43 on

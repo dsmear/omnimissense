@@ -15,6 +15,10 @@
   a call starting before the last position of the previous call on the same sequence failed
   with "the file is not sorted" (e.g. a mitochondrion listed before other contigs, or
   repeated API calls). Each csq call now runs in its own process (≈ 45 ms overhead).
+- **Multi-residue changes** (an MNV over two codons, csq `4WL>4CM`) are scored as the sum of
+  their single substitutions (wild-type and masked), every reference residue checked;
+  previously reported as `multi_aa_change` and not scored. `multi_aa_change` now only means
+  a change of protein length.
 - **GTF annotations** (Ensembl, GENCODE, NCBI, AUGUSTUS/BRAKER) are accepted wherever a GFF3
   is: converted internally to GFF3, with the stop codon merged back into the CDS and the
   biotypes, tags and CDS attributes (`transl_table`, `transl_except`, `pseudo`) kept.
