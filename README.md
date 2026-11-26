@@ -193,23 +193,29 @@ The last three are longer than 1022 residues and use our sliding windows.
 **Does it hold far from human? ProteinGym, all 217 assays by taxon**
 (`benchmarks/proteingym_all.py`): 2.47 M mutants in 186 proteins, Spearman aggregated as
 ProteinGym does (per protein, then per taxon; overall: per function type). Published models
-on the same assays; VESM scored by us (wild-type marginal), the others as published by
-ProteinGym (ESM-2: masked marginal).
+on the same assays. VESM and ESM-2 "(ours)" are scored by omnimissense with the wild-type
+marginal (results: `benchmarks/results/proteingym_all_*.tsv`); the other columns are
+ProteinGym's published scores (ESM-2: masked marginal).
 
-| | assays (proteins) | **VESM 650M** | ESM-2 650M | ESM-C 600M | GEMME (alignments) | VenusREM (structure + alignments) |
-|---|---|---|---|---|---|---|
-| Overall (by function) | 217 (186) | **0.457** | 0.414 | 0.405 | 0.455 | 0.518 |
-| Human | 96 (81) | **0.474** | 0.457 | 0.462 | 0.469 | 0.529 |
-| Other eukaryotes | 40 (34) | **0.517** | 0.486 | 0.481 | 0.516 | 0.582 |
-| Prokaryotes | 50 (43) | **0.481** | 0.458 | 0.459 | 0.467 | 0.549 |
-| Viruses | 31 (28) | **0.426** | 0.261 | 0.241 | 0.472 | 0.492 |
+| | assays (proteins) | **VESM 650M** | ESM-2 650M (ours) | ESM-2 650M (published) | ESM-C 600M | GEMME (alignments) | VenusREM (structure + alignments) |
+|---|---|---|---|---|---|---|---|
+| Overall (by function) | 217 (186) | **0.457** | 0.418 | 0.414 | 0.405 | 0.455 | 0.518 |
+| Human | 96 (81) | **0.474** | 0.458 | 0.457 | 0.462 | 0.469 | 0.529 |
+| Other eukaryotes | 40 (34) | **0.517** | 0.519 | 0.486 | 0.481 | 0.516 | 0.582 |
+| Prokaryotes | 50 (43) | **0.481** | 0.464 | 0.458 | 0.459 | 0.467 | 0.549 |
+| Viruses | 31 (28) | **0.426** | 0.260 | 0.261 | 0.241 | 0.472 | 0.492 |
 
 - **No loss outside human for cellular life:** VESM scores eukaryotic and prokaryotic proteins
   at least as well as human ones, on par with alignment-based methods (GEMME), which need a
   deep multiple sequence alignment for every protein.
-- **Viruses are the weak spot of single-sequence models** (ESM-2 0.261, ESM-C 0.241). VESM
-  recovers most of it (0.426; VESM − ESM-2 +0.165, 95% interval +0.100 to +0.231 over
-  proteins) but stays below alignment-based methods (≈0.47): use viral scores with more care.
+- **Viruses are the weak spot of single-sequence models** (ESM-2 0.260, ESM-C 0.241). VESM
+  recovers most of it: VESM − ESM-2 with the same scoring +0.167 (95% interval +0.103 to
+  +0.230 over proteins; better on 25 of 31 viral assays), so the gain comes from the model,
+  not from the scoring mode. It stays below alignment-based methods (≈0.47): use viral
+  scores with more care.
+- VESM vs ESM-2, same scoring: +0.017 human (+0.003 to +0.030), −0.001 other eukaryotes,
+  +0.017 prokaryotes (−0.004 to +0.040). Our ESM-2 wild-type numbers match ProteinGym's
+  published ESM-2 (masked) within noise (overall +0.008, −0.002 to +0.018).
 - Overall VESM would rank 17th of 98 on the ProteinGym leaderboard, level with the best
   single-sequence model (VespaG, 0.458, GPL); the models above it mostly also use protein
   structure and/or alignments.
