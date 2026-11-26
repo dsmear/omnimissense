@@ -234,9 +234,9 @@ do).
   taken from the GFF3). The other 6 are ORFs that NCBI itself marks as pseudogenes (internal
   stop codons).
 - **Prokaryote** (same script): *E. coli* K-12 MG1655 (GCF_000005845.2), whose CDS hang
-  directly from genes; 4,297 / 4,297 proteins identical to NCBI's translation (table 11 from
-  the GFF3), including the programmed frameshifts of *prfB*, *dnaX* and *copA*. Not scored:
-  18 NCBI pseudogenes and 3 selenoproteins.
+  directly from genes; 4,300 / 4,300 proteins identical to NCBI's translation (table 11 from
+  the GFF3), including the programmed frameshifts of *prfB*, *dnaX* and *copA* and the 3
+  selenoproteins (selenocysteine from `transl_except`). Not scored: 18 NCBI pseudogenes.
 - **Genome-coordinate export** (`export-variants`): on every possible SNV of all CDS bases of
   300 random transcripts, the exported rows equal `annotate`'s scored consequences (yeast
   955,675 / 955,675, *E. coli* 624,682 / 624,682; same transcripts, positions, amino acids and
@@ -375,8 +375,10 @@ What this says:
   `transl_table` in the GFF3) are skipped and reported (`mitochondrial_skipped`).
 - RNA editing (plant mitochondria and plastids) is not modelled: the protein is translated
   from the genome sequence.
-- Selenoproteins (a TGA codon read as selenocysteine) look like proteins with an internal
-  stop and are skipped (1 transcript in the dog, 3 in *E. coli*).
+- Selenocysteine and pyrrolysine are read from NCBI-style `transl_except` attributes (the
+  residue becomes `U` / `O`; variants elsewhere in the protein are scored, the recoded codon
+  itself is not). Without that attribute (e.g. Ensembl GFF3) a selenoprotein looks like a
+  protein with an internal stop and is skipped (1 transcript in the dog).
 - Consequences are computed one record at a time: two nearby variants on the same haplotype
   that change the same codon are scored separately.
 - Variants changing several residues at once (MNVs) are reported but not scored.

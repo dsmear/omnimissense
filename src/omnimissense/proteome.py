@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+import numpy as np
 import pysam
 
 from omnimissense.genetic_code import GENETIC_CODES
@@ -46,11 +47,38 @@ def coding_sequence(fasta: pysam.FastaFile, transcript: Transcript) -> str:
     return "".join(parts)[first_phase:]
 
 
+def cds_positions(transcript: Transcript) -> np.ndarray:
+    """1-based genome position of every base of ``coding_sequence(transcript)``."""
+    parts = [
+        np.arange(s.start, s.end + 1)
+        if transcript.strand == "+"
+        else np.arange(s.end, s.start - 1, -1)
+        for s in transcript.cds_in_transcript_order()
+    ]
+    first_phase = transcript.cds_in_transcript_order()[0].phase or 0
+    return np.concatenate(parts)[first_phase:]
+
+
+def _recode(protein: str, transcript: Transcript) -> str:
+    """Put the ``transl_except`` amino acids (selenocysteine U, pyrrolysine O) in place."""
+    positions = cds_positions(transcript)
+    residues = list(protein)
+    for start, end, letter in transcript.recoded:
+        five_prime = start if transcript.strand == "+" else end
+        for index in np.flatnonzero(positions == five_prime):
+            if index % 3 == 0 and index // 3 < len(residues):
+                residues[index // 3] = letter
+    return "".join(residues)
+
+
 def translate_transcript(fasta: pysam.FastaFile, transcript: Transcript) -> Protein:
     """Translate with the transcript's genetic code.
 
     An initiation codon of that code (e.g. CTG, TTG in the standard code) at a complete 5'
     end is read as methionine, as the ribosome does and as Ensembl and NCBI translate.
+    Codons recoded by the GFF3 (``transl_except``: selenocysteine, pyrrolysine) are read as
+    such instead of as stops. bcftools csq treats them as stops but still calls the missense
+    variants after them, with the same numbering.
     """
     if not transcript.cds:
         return Protein(transcript.transcript_id, "", ProteinStatus.NO_CDS)
@@ -65,6 +93,8 @@ def translate_transcript(fasta: pysam.FastaFile, transcript: Transcript) -> Prot
         protein = protein[:-1]  # terminal stop, also where it codes for Q/E inside a CDS
     if protein and transcript.complete_5prime and cds[:3] in code.starts:
         protein = "M" + protein[1:]
+    if transcript.recoded:
+        protein = _recode(protein, transcript)
     status = ProteinStatus.INTERNAL_STOP if "*" in protein else ProteinStatus.OK
     return Protein(transcript.transcript_id, protein, status)
 

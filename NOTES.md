@@ -324,3 +324,13 @@ protein → writes them to the VCF `INFO` field.
 | Formats: new INFO tag and new **last** TSV column; existing fields, columns and the `OMS` entry layout unchanged | Additive change, safe for existing parsers (pre-1.0 rule: add, do not change). |
 | Check on yeast R64 (tiny model, cached scores) | Reference from 19.4 M SNVs in 31 s, peak RSS 1.3 GB (with the model). On 955,675 random coding SNVs: median percentile 50.0 and 1.00% below the 1st percentile, as expected for random SNVs; `bcftools annotate` with the exported VCF reproduces `OMS_WT` and `OMS_WT_PCT` exactly (945,891 SNVs). Dog (73.8 M SNVs) expected ≈ 2 min. |
 | Code: the SNV enumeration moved from `variant_export.py` to `snvs.py` | Shared by the export and the reference without an import cycle. |
+
+---
+
+## 2026-11-26 — Selenocysteine; csq state between calls
+
+| Decision / finding | Rationale |
+|---|---|
+| Read `transl_except` (NCBI) on CDS features: `aa:Sec` → `U`, `aa:Pyl` → `O` at the codon's position; other values (e.g. `TERM`) ignored | Checked first how csq handles a selenoprotein (*E. coli* fdhF, Sec at residue 140): it ignores `transl_except`, calls a change of the Sec codon `stop_lost` (`140*>140L`), and calls the variants after it as ordinary missense with continued numbering (`456T>456I`). So reading the codon as `U` makes the whole protein scorable and consistent with csq; the `U` residue itself is never scored (not one of the 20 amino acids; csq does not call it missense). ESM has `U` and `O` tokens. |
+| Results | *E. coli*: 4,300 / 4,300 proteins identical to NCBI's translated CDS (fdhF, fdnG, fdoG now included). Every SNV of the 3 selenoproteins: 18,107 missense consequences, all `ok`, identical between `annotate` and `export-variants`, none at the Sec residue. Yeast unchanged (6,021 / 6,021). The dog's selenoprotein stays skipped: the Ensembl GFF3 has no `transl_except` (support for Ensembl's own representation, if any, not checked). |
+| **Bug found and fixed:** bcftools csq keeps state between calls in one Python process | Found by a test: after a csq call whose last record was at position 16, a call with a record at position 10 on the same sequence failed with "The file is not sorted, 1:16 comes before 1:10", even after an intermediate call on an empty VCF. Same family as the genetic-code table that survived between calls. Real-world risk: `annotate` runs csq once per genetic code, so a mitochondrion listed before other contigs (with variants on those contigs) could fail; repeated API calls (benchmarks) too. Each csq call now runs in a fresh `python -c` process (≈ 45 ms; the test suite goes from 2 s to 6 s). Regression test added. E. coli export-vs-annotate check rerun after the change: identical. |

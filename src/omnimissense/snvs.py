@@ -16,7 +16,7 @@ import pysam
 
 from omnimissense.genetic_code import GENETIC_CODES
 from omnimissense.gff import Transcript
-from omnimissense.proteome import Protein, coding_sequence
+from omnimissense.proteome import Protein, cds_positions, coding_sequence
 from omnimissense.sequences import AA_INDEX
 
 _BASES = "ACGT"
@@ -43,18 +43,6 @@ def _code_arrays(table_id: int, _cache: dict[int, _CodeArrays] = {}) -> _CodeArr
             start=np.array([c in code.starts for c in codons]),
         )
     return _cache[table_id]
-
-
-def cds_positions(transcript: Transcript) -> np.ndarray:
-    """1-based genome position of every base of ``coding_sequence(transcript)``."""
-    parts = [
-        np.arange(s.start, s.end + 1)
-        if transcript.strand == "+"
-        else np.arange(s.end, s.start - 1, -1)
-        for s in transcript.cds_in_transcript_order()
-    ]
-    first_phase = transcript.cds_in_transcript_order()[0].phase or 0
-    return np.concatenate(parts)[first_phase:]
 
 
 @dataclass

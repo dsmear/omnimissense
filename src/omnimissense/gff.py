@@ -40,6 +40,10 @@ CANONICAL_TAGS = frozenset({"Ensembl_canonical", "MANE Select", "RefSeq Select"}
 #: NCBI names sequences by accession (e.g. ``NC_001224.1``), so the name alone is not enough.
 _MITOCHONDRIAL_GENOMES = frozenset({"mitochondrion"})
 
+#: ``transl_except`` amino acids that omnimissense reads (others, e.g. ``TERM``, are ignored).
+_RECODED = {"Sec": "U", "Pyl": "O"}
+_TRANSL_EXCEPT = re.compile(r"\(pos:(?:complement\()?(\d+)\.\.(\d+)\)?,aa:(\w+)\)")
+
 #: ID prefixes of the Ensembl layout, which csq strips.
 _ID_PREFIXES = ("gene:", "transcript:")
 
@@ -77,6 +81,9 @@ class Transcript:
     #: The GFF3 gives the 5'-most CDS a non-zero phase (the CDS starts inside a codon).
     #: csq's dump trims that partial codon and resets the phase, so it is kept here.
     incomplete_5prime: bool = False
+    #: Codons read as a non-standard amino acid (GFF3 ``transl_except``): genome start, end
+    #: and letter, e.g. selenocysteine ``U`` at a TGA, pyrrolysine ``O`` at a TAG.
+    recoded: list[tuple[int, int, str]] = field(default_factory=list)
     cds: list[CdsSegment] = field(default_factory=list)
 
     def cds_in_transcript_order(self) -> list[CdsSegment]:
@@ -372,7 +379,8 @@ def _write_normalized(
 
 
 def _add_source_attributes(path: Path, transcripts: dict[str, Transcript]) -> dict[str, bool]:
-    """Set biotype, gene name, canonical tag, pseudo flag and 5' completeness from the GFF3.
+    """Set biotype, gene name, canonical tag, pseudo flag, 5' completeness and recoded
+    codons (``transl_except``) from the GFF3.
 
     Returns ``{gene_id: True}`` for genes with a canonical-tagged transcript (coding or not).
     """
@@ -391,6 +399,13 @@ def _add_source_attributes(path: Path, transcripts: dict[str, Transcript]) -> di
                     continue
                 if attributes.get("pseudo") == "true":
                     transcript.pseudo = True
+                for begin, finish, amino_acid in _TRANSL_EXCEPT.findall(
+                    attributes.get("transl_except", "")
+                ):
+                    letter = _RECODED.get(amino_acid)
+                    codon = (int(begin), int(finish), letter)
+                    if letter and codon not in transcript.recoded:
+                        transcript.recoded.append(codon)
                 current = first_cds.get(transcript.transcript_id)
                 if current is None or five_prime < current[0]:
                     first_cds[transcript.transcript_id] = (

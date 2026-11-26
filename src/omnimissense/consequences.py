@@ -1,18 +1,22 @@
 """Protein-level consequences of VCF variants, computed with bcftools csq.
 
 bcftools is used through the copy bundled in pysam, so no external installation is needed.
+Each csq call runs in its own Python process: pysam runs bcftools inside the calling
+process, and csq keeps state from one call to the next (the genetic-code table, and the last
+position read, which makes a later call fail with "the file is not sorted" when it starts
+before that position on the same sequence).
 """
 
 from __future__ import annotations
 
 import re
+import subprocess
+import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 import pysam
-import pysam.bcftools
-import pysam.utils
 
 from omnimissense.genetic_code import STANDARD
 from omnimissense.genetic_code import genetic_code as check_genetic_code
@@ -31,6 +35,33 @@ _UNUSABLE_GFF_HINT = (
 
 class CsqError(RuntimeError):
     """bcftools csq failed."""
+
+
+#: Runs ``bcftools csq`` (pysam) with the given arguments in a fresh interpreter; csq's log
+#: goes to stderr, a failure exits with status 1.
+_CSQ_RUNNER = """
+import sys
+import pysam.bcftools
+import pysam.utils
+try:
+    pysam.bcftools.csq(*sys.argv[1:], catch_stdout=False)
+except pysam.utils.SamtoolsError as exc:
+    sys.stderr.write(str(exc))
+    sys.exit(1)
+sys.stderr.write(pysam.bcftools.csq.get_messages())
+"""
+
+
+def _bcftools_csq(*args: str) -> str:
+    """Run ``bcftools csq`` in its own process; return its log messages."""
+    process = subprocess.run(
+        [sys.executable, "-c", _CSQ_RUNNER, *args], capture_output=True, text=True
+    )
+    if process.returncode != 0:
+        if "No usable transcripts" in process.stderr:
+            raise CsqError(f"{_UNUSABLE_GFF_HINT}\nbcftools csq said: {process.stderr}")
+        raise CsqError(f"bcftools csq failed: {process.stderr}")
+    return process.stderr
 
 
 @dataclass(frozen=True)
@@ -110,15 +141,9 @@ def run_csq(
     if dump_gff is not None:
         args += ["--dump-gff", str(dump_gff)]
     if genetic_code != STANDARD:
-        check_genetic_code(genetic_code)  # csq silently keeps the previous table on bad IDs
+        check_genetic_code(genetic_code)  # a clear error instead of csq's
         args += ["-C", str(genetic_code)]
-    try:
-        pysam.bcftools.csq(*args, str(vcf), catch_stdout=False)
-    except pysam.utils.SamtoolsError as exc:
-        if "No usable transcripts" in str(exc):
-            raise CsqError(f"{_UNUSABLE_GFF_HINT}\nbcftools csq said: {exc}") from exc
-        raise CsqError(f"bcftools csq failed: {exc}") from exc
-    return pysam.bcftools.csq.get_messages()
+    return _bcftools_csq(*args, str(vcf))
 
 
 def dump_annotation(fasta: Path, gff3: Path, output: Path) -> None:
