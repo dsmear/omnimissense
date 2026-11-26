@@ -2,11 +2,11 @@
 
 The reference distribution of a genome annotation is the wild-type-marginal score of every
 possible missense SNV of its canonical protein-coding transcripts, one value per SNV and
-transcript (the rows that ``export-variants`` writes by default). The percentile of a score is the share of that
-distribution with a lower (more damaging) score, in percent: 1.0 means "among the 1% most
-damaging missense changes possible in this genome". It is a monotone transform of the
-score: it changes no ranking, it only puts the score on a scale that reads the same for
-every gene, species and model.
+transcript (the rows that ``export-variants`` writes by default). The percentile of a score
+is the share of that distribution with a lower (more damaging) score, in percent: 1.0 means
+"among the 1% most damaging missense changes possible in this genome". It is a monotone
+transform of the score: it changes no ranking, it only puts the score on a scale that reads
+the same for every gene, species and model.
 
 The distribution is stored in the score cache as a table of quantiles, finer in the
 damaging tail (steps of 0.001 percentage points below the 1st percentile, 0.01 above), under
