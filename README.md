@@ -193,19 +193,21 @@ percentile within each protein was considered and rejected: it discards what sep
 genes (dog pathogenic variants sit at a median 34th percentile of their own protein, while
 the raw score separates them from common variants with AUROC 0.977).
 
-**Reading the percentile.** Share of variants below each percentile in the chicken benchmark
-(VESM 650M; [Validation](#validation)):
+**Reading the percentile.** Share of variants below each percentile in the dog and chicken
+benchmarks (VESM 650M; [Validation](#validation)):
 
-| `OMS_WT_PCT` below | all possible missense changes | OMIA causal variants (21) | common variants, AF ≥ 5% (1,817) |
-|---|---|---|---|
-| 5 | 5% | 10% | 0% |
-| 10 | 10% | 29% | 0.1% |
-| 20 | 20% | 43% | 0.6% |
-| 30 | 30% | 48% | 1.6% |
-| 50 | 50% | 67% | 8.1% |
+| `OMS_WT_PCT` below | all possible missense changes | dog pathogenic (49) | dog disease (118) | dog common (521) | chicken causal (21) | chicken common (1,817) |
+|---|---|---|---|---|---|---|
+| 5 | 5% | 16% | 14% | 0% | 10% | 0% |
+| 10 | 10% | 41% | 32% | 0% | 29% | 0.1% |
+| 20 | 20% | 63% | 56% | 0% | 43% | 0.6% |
+| 30 | 30% | 78% | 74% | 2.3% | 48% | 1.6% |
+| 50 | 50% | 90% | 88% | 9.4% | 67% | 8.1% |
 
-Causal variants need not be extreme: half of them are below the 30th percentile, where only
-1.6% of common variants fall. Common variants are an easy negative set (selection has removed
+Median percentile: dog pathogenic 12, dog disease 16, chicken causal 36 (mostly trait
+variants), common variants 82 in both species. Damaging variants need not be extreme: three
+quarters of the dog pathogenic variants are below the 30th percentile, where about 2% of
+common variants fall. Common variants are an easy negative set (selection has removed
 damaging alleles from high frequency): rare harmless variants score lower on average, so a
 threshold flags more of them than this table suggests. Use the percentile to rank, not as a
 verdict.

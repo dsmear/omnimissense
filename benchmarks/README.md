@@ -59,7 +59,9 @@ reads Dog10K remotely, region by region (only the coding sequence of the selecte
   variants, common variants in the same genes, common variants in random genes and — as in
   the 2025 study that used OMIA "non-deleterious" variants as negatives — OMIA trait variants;
   percentile of each causal variant among all 19 × L possible substitutions of its protein
-  (wild-type marginal; 0 = most damaging).
+  (wild-type marginal; 0 = most damaging); with `omnimissense precompute` run once on the GSD
+  FASTA and GFF3, the proteome-wide percentile (`OMS_WT_PCT`) of causal and common variants
+  and the share below each threshold (`results/dog_omia_<model>.percentiles.tsv`).
 
 **Data sources and terms**
 
