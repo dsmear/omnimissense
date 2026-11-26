@@ -414,3 +414,16 @@ protein → writes them to the VCF `INFO` field.
 | Z chromosome | 5 of the 14 causal genes are Z-linked; the population VCF is autosomal, so they have no same-gene negatives (random-gene and all-common negatives are unaffected). |
 | Dry run on the real OMIA export (tiny random model, chromosome 1 population extract): mapping 21/21 distinct, every step runs | Real numbers need VESM on the user's GPU. |
 | Remote reads of the EVA VCF: one request per merged gene span (gaps < 20 kb), up to 4 sequences at a time, then a local filter to the CDS regions | The first version passed every CDS exon to `bcftools view -R`: about 5,900 separate range requests to EBI, which ran for over 10 minutes on chromosome 1 alone (810 exons) on the user's machine. Spans: 568 requests, ~9.3 Mb (~100 MB of the 12 GB file); identical SNVs on the local chromosome 1 extract (281 = 281). |
+
+---
+
+## 2026-11-26 — Public Python API
+
+| Decision | Rationale |
+|---|---|
+| A small public module (`omnimissense.api`, re-exported by the package): `Model`, `ProteinScores`, `annotate`, `precompute`, `AnnotatedVariant(s)`, `VariantStatus`, `PrecomputeResult`, `ReferenceMismatchError`, `AMINO_ACIDS`; declared stable in *Compatibility*. Everything else stays internal. | Before, using omnimissense from code meant internal plumbing (a `ScoreCache`, a scorer factory, the model name three times, mandatory output files) and unlabelled `L × 20` matrices. The CLI is unchanged. |
+| `AnnotatedVariant` fields = the TSV columns, same names and order, plus `protein_change` and `record_index`; internal details (`seq_hash`, `alt_index`, the nested csq `Consequence`) are not exposed | One vocabulary for the command line and the code; the TSV is already a stability promise. |
+| `Model` loads the weights lazily (first score not in the cache) | A fully cached genome needs no GPU, as with the CLI; creating a `Model` is free. |
+| Tables: `to_arrow()` always, `to_pandas()` with the optional extra `omnimissense[pandas]` (imported on call, clear error otherwise) | pyarrow is already a dependency (the cache); pandas is not installed today, even indirectly, and could clash with a user's pinned version. |
+| `import omnimissense` imports the API on first attribute access (PEP 562) | The CLI keeps starting without torch (checked by a test). |
+| `pipeline.annotate` takes `output_vcf` / `output_tsv` as optional | The API returns objects; files are written only when asked. The annotated VCF needs csq's temporary output, so it is written during the call (`output_vcf=`), not afterwards. |

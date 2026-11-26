@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+**New**
+
+- **Python API** (`import omnimissense as om`), stable from this release on (README,
+  *Python API* and *Compatibility*): `om.Model` (lazy loading, shared score cache),
+  `model.score_protein()` / `score_proteins()` returning `ProteinScores` (every
+  substitution; `scores["Y5D"]`), `om.annotate()` returning `AnnotatedVariants` of
+  documented `AnnotatedVariant` objects (the TSV columns plus `protein_change`), with
+  `to_arrow()`, `to_pandas()` and `write_tsv()`, and `om.precompute()`. Optional extra
+  `omnimissense[pandas]` for `to_pandas()`.
+- Chicken benchmark (`benchmarks/chicken_omia.py`): OMIA causal variants vs common variants
+  of 96 Bangladeshi chickens (EVA), with the human-ortholog comparison.
+
+**Changes in behaviour**
+
+- None for the command line. `import omnimissense` still loads no torch.
+
 ## 0.4.0 — 2026-11-26
 
 A genome-wide scale for the score, selenoproteins, GTF input, MNVs, and a much faster cache.

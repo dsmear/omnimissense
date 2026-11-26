@@ -252,8 +252,8 @@ def add_percentiles(variants: Iterable[ScoredVariant], cache: ScoreCache, key: s
         if scored:
             log.warning(
                 "No percentile reference for this genome annotation and model: OMS_WT_PCT "
-                "left empty. Run `omnimissense precompute` once (same FASTA, GFF3, model and "
-                "genetic codes) to build it"
+                "left empty. Run `omnimissense precompute` (Python: `omnimissense.precompute`) "
+                "once (same FASTA, GFF3, model and genetic codes) to build it"
             )
         return False
     for variant, value in zip(
@@ -616,8 +616,8 @@ def annotate(
     vcf: Path,
     fasta: Path,
     gff3: Path,
-    output_vcf: Path,
-    output_tsv: Path,
+    output_vcf: Path | None = None,
+    output_tsv: Path | None = None,
     *,
     cache: ScoreCache,
     scorer_factory: ScorerFactory,
@@ -629,6 +629,7 @@ def annotate(
 ) -> AnnotationResult:
     """Annotate missense variants in ``vcf`` with protein language model scores.
 
+    The annotated VCF and the TSV are written when their paths are given.
     ``genetic_code`` / ``mito_genetic_code``: NCBI tables for nuclear / mitochondrial
     sequences; default: from the GFF3 (see ``omnimissense.genetic_code.CodeAssignment``).
     """
@@ -661,10 +662,13 @@ def annotate(
         score_variants(variants, proteins, cache, scorer_factory, masked=masked)
         add_percentiles(variants, cache, reference_key(gff3, fasta, annotation.codes))
 
-        output_vcf.parent.mkdir(parents=True, exist_ok=True)
-        mismatch_indices = {m.index for m in ref_mismatches}
-        write_vcf(vcf, sites, output_vcf, variants, mismatch_indices, model_name)
-    write_tsv(output_tsv, variants)
+        if output_vcf is not None:
+            output_vcf.parent.mkdir(parents=True, exist_ok=True)
+            mismatch_indices = {m.index for m in ref_mismatches}
+            write_vcf(vcf, sites, output_vcf, variants, mismatch_indices, model_name)
+    if output_tsv is not None:
+        output_tsv.parent.mkdir(parents=True, exist_ok=True)
+        write_tsv(output_tsv, variants)
     return AnnotationResult(
         n_records=n_records, variants=variants, n_ref_mismatches=len(ref_mismatches)
     )
@@ -675,14 +679,24 @@ def annotate(
 
 @dataclass
 class PrecomputeResult:
+    """What ``precompute`` did."""
+
+    #: Coding transcripts in the annotation.
     n_transcripts: int
+    #: Distinct proteins among them (identical sequences are scored once).
     n_unique_proteins: int
+    #: Proteins whose scores were already in the cache.
     n_already_cached: int
+    #: Proteins scored now.
     n_scored: int
+    #: Residues scored now.
     residues_scored: int
+    #: Time taken.
     seconds: float
+    #: Transcripts per translation status (``ok``, ``mitochondrial``, ``internal_stop``...).
     status_counts: Counter[str]
-    reference_snvs: int = 0  # SNVs in the percentile reference (0: already built)
+    #: Values in the percentile reference built now (0: it already existed).
+    reference_snvs: int = 0
 
 
 def precompute(

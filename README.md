@@ -12,7 +12,8 @@ omnimissense annotate --vcf my.vcf.gz --fasta genome.fa.gz --gff3 genes.gff3.gz 
 ```
 
 Python ≥ 3.11; a CUDA GPU is strongly recommended (CPU works but is slow). bcftools is bundled
-through pysam: nothing else to install. Full example: [Quick start](#quick-start-dog).
+through pysam: nothing else to install. Full example: [Quick start](#quick-start-dog); from
+Python code: [Python API](#python-api).
 
 > **Status: alpha.** The pipeline works end to end on Ensembl and NCBI annotations (dog, yeast,
 > *E. coli*: proteomes identical to the reference translations), reproduces published ESM-2
@@ -196,6 +197,49 @@ the raw score separates them from common variants with AUROC 0.977).
 `multi_aa_change` (the change alters the protein length), `nonstandard_aa`, `protein_unavailable`
 (e.g. internal stop codon), `mitochondrial_skipped` (see limitations), `pseudogene` (CDS
 flagged `pseudo=true` by NCBI: a disrupted gene). Only `ok` rows are scored.
+
+## Python API
+
+```python
+import omnimissense as om
+
+model = om.Model()  # VESM 650M; the weights load on first use (GPU if any)
+
+# one protein: every substitution, wild-type marginal (one forward pass)
+scores = model.score_protein("MKTAYIAKQRQISFVKSHFSRQ")
+scores["Y5D"]  # -> float; also "p.Y5D", "p.(Tyr5Asp)"
+scores.to_pandas()  # position, ref_aa, alt_aa, change, wt_marginal
+
+# a VCF, as `omnimissense annotate` does
+result = om.annotate("calls.vcf.gz", fasta="genome.fa.gz", gff3="genes.gff3.gz", model=model)
+for v in result:  # one AnnotatedVariant per ALT allele and transcript
+    if v.is_scored:
+        print(v.gene, v.transcript, v.protein_change, v.wt_marginal, v.wt_percentile)
+result.to_arrow()  # or .to_pandas(), .write_tsv(path)
+
+om.precompute("genome.fa.gz", "genes.gff3.gz", model=model)  # cache + percentile reference
+```
+
+- **Scores** are log-likelihood ratios (natural log) of the alternative vs the reference
+  amino acid: 0 = as likely as the reference, negative = less likely (more damaging).
+  `ProteinScores.llr` is the `L × 20` matrix (columns in `om.AMINO_ACIDS` order, row `i` =
+  position `i + 1`); `scores["Y5D"]` checks the reference residue.
+  `model.score_protein(seq, masked=True, positions=[...])` gives masked marginals (one pass
+  per position); `model.score_proteins([...])` scores many proteins in one batch.
+- **`AnnotatedVariant`** has the TSV columns as fields (same names, same order), plus
+  `protein_change` (`"R106W"`; `"W4C+L5M"` for a change over two codons) and
+  `record_index` (0-based record of the input VCF). Scores are `None` unless
+  `status == "ok"`; `wt_percentile` is `None` until `precompute` was run once for the genome.
+  `om.annotate(..., output_vcf=..., output_tsv=...)` also writes the files the command line
+  writes.
+- **Cache.** Every score is cached on disk per model (`cache_dir=`, default
+  `$OMNIMISSENSE_CACHE` or `~/.cache/omnimissense`, shared with the command line), so a
+  genome scored once never needs the GPU again.
+- **DataFrames:** `to_arrow()` needs nothing more (pyarrow is a dependency; polars:
+  `pl.from_arrow(...)`); `to_pandas()` needs pandas: `pip install 'omnimissense[pandas]'`.
+- `om.Model.from_scorer(scorer, name=...)` wraps a model you loaded yourself
+  (`omnimissense.scoring.MaskedLMScorer`). `import omnimissense` stays light: torch loads
+  only when the API is first used.
 
 ## Performance (RTX 3070, 8 GB)
 
@@ -414,9 +458,14 @@ new minor version):
   existing names and positions unchanged);
 - status values keep their meaning (new ones can be added);
 - the definition of the scores (log-likelihood ratios, wild-type and masked marginals, the
-  long-protein windows).
+  long-protein windows);
+- the Python API: the names exported by `omnimissense` (`Model`, `ProteinScores`,
+  `annotate`, `precompute`, `AnnotatedVariant`, `AnnotatedVariants`, `VariantStatus`,
+  `PrecomputeResult`, `ReferenceMismatchError`, `AMINO_ACIDS`), their parameters, fields and
+  methods (new ones can be added, with defaults).
 
-**Not stable:** the Python API (modules and functions are internal), log messages, and the
+**Not stable:** the other modules (`omnimissense.pipeline`, `omnimissense.scoring`, … are
+internal), log messages, and the
 on-disk cache layout. The cache is versioned (`<cache>/v1/…`): a change in how scores are
 computed bumps the version, so an old cache is recomputed, never misread. The percentile
 reference is keyed by the annotation, genome and genetic codes.
