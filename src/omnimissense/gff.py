@@ -4,8 +4,8 @@ bcftools csq parses several GFF3 layouts (Ensembl, NCBI RefSeq, ...) into one in
 and can write that model back (``--dump-gff``). omnimissense reads the dump, so csq and the
 protein translation see the same transcripts, IDs and coding segments by construction, for
 every layout csq accepts. Attributes the dump does not keep are read from the GFF3 itself:
-the original transcript biotype, gene names, canonical-transcript tags and which sequences
-are mitochondrial.
+the original transcript biotype, gene names, canonical-transcript tags, and which sequences
+are mitochondrial or use a non-standard genetic code (NCBI ``transl_table``).
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import gzip
 import io
 import logging
 import tempfile
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +22,7 @@ from typing import TextIO
 from urllib.parse import unquote
 
 from omnimissense.consequences import dump_annotation
+from omnimissense.genetic_code import STANDARD, CodeAssignment
 
 log = logging.getLogger(__name__)
 
@@ -60,6 +61,8 @@ class Transcript:
     canonical: bool = False
     gene_name: str = ""
     mitochondrial: bool = False
+    #: NCBI genetic code; None = mitochondrial DNA of unknown code (not translated).
+    genetic_code: int | None = STANDARD
     cds: list[CdsSegment] = field(default_factory=list)
 
     def cds_in_transcript_order(self) -> list[CdsSegment]:
@@ -140,19 +143,58 @@ def read_csq_dump(path: Path) -> dict[str, Transcript]:
     return transcripts
 
 
+def scan_genetic_codes(
+    gff3: Path, nuclear: int | None = None, mitochondrial: int | None = None
+) -> CodeAssignment:
+    """The genetic code of every sequence: the given codes, else what the GFF3 says.
+
+    A quick pass reads only NCBI ``region`` features (``genome=mitochondrion``) and the
+    ``transl_table`` attribute of CDS features (NCBI writes it when the code is not the
+    standard one). ``nuclear`` and ``mitochondrial`` override the GFF3 (see
+    ``CodeAssignment``).
+    """
+    mito_seqids = set()
+    tables: dict[str, Counter[int]] = defaultdict(Counter)
+    with open_text(gff3) as handle:
+        for line in handle:
+            if line.startswith("#"):
+                if line.startswith("##FASTA"):
+                    break
+                continue
+            if "\tregion\t" not in line and "transl_table=" not in line:
+                continue
+            columns = line.rstrip("\n").split("\t")
+            if len(columns) != 9:
+                continue
+            attributes = parse_attributes(columns[8])
+            if columns[2] == "region" and attributes.get("genome") in _MITOCHONDRIAL_GENOMES:
+                mito_seqids.add(columns[0])
+            elif columns[2] == "CDS" and attributes.get("transl_table", "").isdigit():
+                tables[columns[0]][int(attributes["transl_table"])] += 1
+    annotated = {}
+    for seqid, counts in tables.items():
+        (table_id, _n), *others = counts.most_common()
+        if others:
+            log.warning(
+                "%s: CDS with several transl_table values %s; using %d",
+                seqid,
+                dict(counts),
+                table_id,
+            )
+        annotated[seqid] = table_id
+    return CodeAssignment(nuclear, mitochondrial, annotated, frozenset(mito_seqids))
+
+
 def _add_source_attributes(path: Path, transcripts: dict[str, Transcript]) -> dict[str, bool]:
-    """Set biotype, gene name, canonical tag and mitochondrial flag from the original GFF3.
+    """Set biotype, gene name and canonical tag from the original GFF3.
 
     Returns ``{gene_id: True}`` for genes with a canonical-tagged transcript (coding or not).
     """
     gene_ids = {tx.gene_id for tx in transcripts.values()}
     gene_names: dict[str, str] = {}
     tagged_genes: dict[str, bool] = {}
-    mitochondrial_seqids = set()
-    for seqid, _source, feature, *_rest, attr_text in _features(path):
+    for _seqid, _source, _feature, *_rest, attr_text in _features(path):
         attributes = parse_attributes(attr_text)
-        if feature == "region" and attributes.get("genome") in _MITOCHONDRIAL_GENOMES:
-            mitochondrial_seqids.add(seqid)
         feature_id = attributes.get("ID")
         if not feature_id:
             continue
@@ -169,7 +211,6 @@ def _add_source_attributes(path: Path, transcripts: dict[str, Transcript]) -> di
             gene_names[key] = attributes.get("Name", "")
     for transcript in transcripts.values():
         transcript.gene_name = gene_names.get(transcript.gene_id, "")
-        transcript.mitochondrial = transcript.seqid in mitochondrial_seqids
     return tagged_genes
 
 
@@ -193,13 +234,37 @@ def _choose_untagged_canonicals(
     return len(best)
 
 
+def _log_genetic_codes(transcripts: dict[str, Transcript]) -> None:
+    coding = [tx for tx in transcripts.values() if tx.cds]
+    in_use = Counter(tx.genetic_code for tx in coding)
+    if set(in_use) - {STANDARD, None}:
+        log.info(
+            "Genetic codes (NCBI table: coding transcripts): %s",
+            ", ".join(f"{k}: {n}" for k, n in sorted(i for i in in_use.items() if i[0])),
+        )
+    if in_use[None]:
+        seqids = sorted({tx.seqid for tx in coding if tx.genetic_code is None})
+        log.warning(
+            "%d mitochondrial coding transcripts (%s) are skipped: their genetic code is not "
+            "known. Set it with --mito-genetic-code (e.g. 2 vertebrates, 3 yeast, "
+            "5 invertebrates)",
+            in_use[None],
+            ", ".join(seqids),
+        )
+
+
 def read_transcripts(
-    gff3: Path, fasta: Path, *, csq_dump: Path | None = None
+    gff3: Path,
+    fasta: Path,
+    *,
+    csq_dump: Path | None = None,
+    codes: CodeAssignment | None = None,
 ) -> dict[str, Transcript]:
     """All transcripts of ``gff3`` as bcftools csq reads them, keyed by csq's transcript ID.
 
     ``fasta`` must be indexable by htslib (plain or BGZF). ``csq_dump`` is the ``--dump-gff``
-    output of an earlier csq run on the same files; without it csq is run here.
+    output of an earlier csq run on the same files; without it csq is run here. ``codes``
+    gives each sequence's genetic code (default: ``scan_genetic_codes(gff3)``).
 
     Canonical transcripts come from the GFF3's tags (``CANONICAL_TAGS``); genes without any
     tagged transcript get the coding transcript with the longest CDS.
@@ -211,6 +276,12 @@ def read_transcripts(
             transcripts = read_csq_dump(dump)
     else:
         transcripts = read_csq_dump(csq_dump)
+    if codes is None:
+        codes = scan_genetic_codes(gff3)
+    for transcript in transcripts.values():
+        transcript.mitochondrial = codes.is_mitochondrial(transcript.seqid)
+        transcript.genetic_code = codes.code(transcript.seqid)
+    _log_genetic_codes(transcripts)
     tagged_genes = _add_source_attributes(gff3, transcripts)
     n_untagged = _choose_untagged_canonicals(transcripts, tagged_genes)
     n_genes = len({tx.gene_id for tx in transcripts.values() if tx.cds})

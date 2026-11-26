@@ -254,3 +254,38 @@ def write_synthetic(directory: Path) -> SyntheticFiles:
     ]
     vcf.write_text("\n".join(header + body) + "\n")
     return SyntheticFiles(fasta=fasta, gff3=gff3, vcf=vcf)
+
+
+# A mitochondrial sequence with one gene that only makes sense in the vertebrate
+# mitochondrial code (NCBI table 2): ATA = M (start), TGA = W, AGA = stop.
+MT_CHROM = "MT"
+MT_GENOME = "GCGCGCGCGC" + "ATAAAATGACTTTGGAGA" + "GCGCGCGCGC"  # CDS 11..28
+MT_PROTEIN = "MKWLW"  # table 2; the standard code gives I K * L W R
+#: (position, ref, alt, expected change in table 2)
+MT_VARIANTS = [(15, "A", "C", "K2T"), (17, "T", "C", "W3R"), (20, "C", "A", "L4I")]
+
+
+def write_synthetic_with_mitochondrion(directory: Path) -> SyntheticFiles:
+    """The synthetic genome plus an ``MT`` sequence carrying gene GM (transcript TXM)."""
+    files = write_synthetic(directory)
+    with files.fasta.open("a") as fasta:
+        fasta.write(f">{MT_CHROM}\n{MT_GENOME}\n")
+    rows = [
+        [MT_CHROM, "test", "gene", "11", "28", ".", "+", ".",
+         "ID=gene:GM;Name=GENEM;biotype=protein_coding"],
+        [MT_CHROM, "test", "mRNA", "11", "28", ".", "+", ".",
+         "ID=transcript:TXM;Parent=gene:GM;biotype=protein_coding;tag=Ensembl_canonical"],
+        [MT_CHROM, "test", "exon", "11", "28", ".", "+", ".", "Parent=transcript:TXM"],
+        [MT_CHROM, "test", "CDS", "11", "28", ".", "+", "0", "ID=CDS:PM;Parent=transcript:TXM"],
+    ]  # fmt: skip
+    with files.gff3.open("a") as gff3:
+        gff3.write("".join("\t".join(row) + "\n" for row in rows))
+    lines = files.vcf.read_text().splitlines()
+    contig = f"##contig=<ID={MT_CHROM},length={len(MT_GENOME)}>"
+    lines.insert(next(i for i, line in enumerate(lines) if line.startswith("#CHROM")), contig)
+    lines += [
+        "\t".join([MT_CHROM, str(pos), ".", ref, alt, ".", "PASS", ".", "GT", "1"])
+        for pos, ref, alt, _change in MT_VARIANTS
+    ]
+    files.vcf.write_text("\n".join(lines) + "\n")
+    return files

@@ -13,13 +13,16 @@ from omnimissense.proteome import (
 )
 
 
-def _transcript(strand: str, cds: list[tuple[int, int, int]], seqid: str = "1") -> Transcript:
+def _transcript(
+    strand: str, cds: list[tuple[int, int, int]], seqid: str = "1", genetic_code: int | None = 1
+) -> Transcript:
     return Transcript(
         transcript_id="T",
         gene_id="G",
         seqid=seqid,
         strand=strand,
         biotype="protein_coding",
+        genetic_code=genetic_code,
         cds=[CdsSegment(*c) for c in cds],
     )
 
@@ -53,6 +56,37 @@ def test_alternative_start_codon_is_translated_as_methionine(tmp_path) -> None:
         assert translate_transcript(fasta, incomplete).sequence == "LKL"
 
 
+def test_genetic_code_of_the_transcript_is_used(tmp_path) -> None:
+    genome = tmp_path / "codes.fa"
+    genome.write_text(">1\nATAAAATGACTTAGG\n")  # CDS 1..12 = ATA AAA TGA CTT
+    with pysam.FastaFile(str(prepare_fasta(genome))) as fasta:
+        standard = translate_transcript(fasta, _transcript("+", [(1, 12, 0)]))
+        assert (standard.sequence, standard.status) == ("IK*L", ProteinStatus.INTERNAL_STOP)
+        # Yeast mitochondrial code: ATA = M (also a start), TGA = W, CTN = T.
+        yeast_mt = translate_transcript(fasta, _transcript("+", [(1, 12, 0)], genetic_code=3))
+        assert (yeast_mt.sequence, yeast_mt.status) == ("MKWT", ProteinStatus.OK)
+        # Vertebrate mitochondrial code: ATA = M, TGA = W, CTT = L.
+        vert_mt = translate_transcript(fasta, _transcript("+", [(1, 12, 0)], genetic_code=2))
+        assert vert_mt.sequence == "MKWL"
+
+
+def test_terminal_stop_that_also_codes_for_an_amino_acid_is_removed(tmp_path) -> None:
+    genome = tmp_path / "taa.fa"
+    genome.write_text(">1\nATGTAAAAATAA\n")  # Condylostoma (28): TAA = Q, or stop at the end
+    with pysam.FastaFile(str(prepare_fasta(genome))) as fasta:
+        protein = translate_transcript(fasta, _transcript("+", [(1, 12, 0)], genetic_code=28))
+        assert (protein.sequence, protein.status) == ("MQK", ProteinStatus.OK)
+
+
+def test_initiation_codons_depend_on_the_genetic_code(tmp_path) -> None:
+    genome = tmp_path / "gtg.fa"
+    genome.write_text(">1\nGTGAAATAA\n")  # GTG: start in tables 2 and 11, not in table 1
+    with pysam.FastaFile(str(prepare_fasta(genome))) as fasta:
+        assert translate_transcript(fasta, _transcript("+", [(1, 9, 0)])).sequence == "VK"
+        bacterial = _transcript("+", [(1, 9, 0)], genetic_code=11)
+        assert translate_transcript(fasta, bacterial).sequence == "MK"
+
+
 def test_wrong_frame_is_reported_as_internal_stop(synthetic) -> None:
     fasta = prepare_fasta(synthetic.fasta)
     with pysam.FastaFile(str(fasta)) as genome:
@@ -64,7 +98,7 @@ def test_wrong_frame_is_reported_as_internal_stop(synthetic) -> None:
 def test_mitochondrial_and_noncoding_transcripts_are_skipped(synthetic) -> None:
     fasta = prepare_fasta(synthetic.fasta)
     with pysam.FastaFile(str(fasta)) as genome:
-        mito = _transcript("+", [(41, 47, 0)], seqid="MT")
+        mito = _transcript("+", [(41, 47, 0)], seqid="1", genetic_code=None)
         assert translate_transcript(genome, mito).status is ProteinStatus.MITOCHONDRIAL
         assert translate_transcript(genome, _transcript("+", [])).status is ProteinStatus.NO_CDS
 

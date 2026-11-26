@@ -8,7 +8,8 @@ import tempfile
 import time
 from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Iterator, Sequence
-from dataclasses import dataclass
+from contextlib import ExitStack
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import TypeVar
@@ -21,7 +22,8 @@ from omnimissense import __version__
 from omnimissense.cache import ScoreCache
 from omnimissense.consequences import Consequence, missense_consequences, run_csq
 from omnimissense.fasta import prepare_fasta
-from omnimissense.gff import Transcript, read_transcripts
+from omnimissense.genetic_code import STANDARD, CodeAssignment
+from omnimissense.gff import Transcript, read_transcripts, scan_genetic_codes
 from omnimissense.proteome import Protein, ProteinStatus, build_proteome
 from omnimissense.scoring import MaskedLMScorer
 from omnimissense.sequences import AA_INDEX
@@ -66,7 +68,7 @@ class VariantStatus(StrEnum):
 
 @dataclass
 class ScoredVariant:
-    record_index: int
+    record_index: int  # 0-based record ordinal in the input VCF
     chrom: str
     pos: int
     ref: str
@@ -227,13 +229,12 @@ def score_variants(
 # ---------------------------------------------------------------------------- annotate
 
 
-def collect_missense(csq_vcf: Path) -> tuple[int, list[ScoredVariant]]:
-    """Read a csq-annotated VCF; return the record count and its missense consequences."""
+def collect_missense(csq_vcf: Path, input_indices: Sequence[int]) -> list[ScoredVariant]:
+    """Missense consequences of a csq-annotated VCF; ``input_indices[i]`` is the input-VCF
+    ordinal of its ``i``-th record."""
     variants = []
-    n_records = 0
     with open_vcf(csq_vcf) as reader:
-        for index, record in enumerate(reader):
-            n_records += 1
+        for record, index in zip(reader, input_indices, strict=True):
             for alt_index, consequence in missense_consequences(record):
                 variants.append(
                     ScoredVariant(
@@ -246,7 +247,7 @@ def collect_missense(csq_vcf: Path) -> tuple[int, list[ScoredVariant]]:
                         consequence=consequence,
                     )
                 )
-    return n_records, variants
+    return variants
 
 
 def classify_variants(
@@ -379,7 +380,7 @@ def _output_header(
 
 def write_vcf(
     input_vcf: Path,
-    csq_vcf: Path,
+    sites: SiteGroups,
     output: Path,
     variants: list[ScoredVariant],
     ref_mismatches: set[int],
@@ -387,45 +388,49 @@ def write_vcf(
 ) -> None:
     """Write the input VCF (all records, all samples) with BCSQ and omnimissense INFO tags.
 
-    ``csq_vcf`` holds the records of ``input_vcf`` minus those in ``ref_mismatches``, in the
-    same order; ``variants[i].record_index`` is a record ordinal in ``csq_vcf``.
+    ``sites`` holds the csq output of each genetic-code group: together, the records of
+    ``input_vcf`` minus those in ``ref_mismatches``, each group in input order.
+    ``variants[i].record_index`` is a record ordinal in ``input_vcf``.
     """
     by_record: dict[int, list[ScoredVariant]] = defaultdict(list)
     for variant in variants:
         by_record[variant.record_index].append(variant)
-    with open_vcf(input_vcf) as reader, open_vcf(csq_vcf) as csq_reader:
-        header = _output_header(reader.header, csq_reader.header, model_name)
-        csq_records = iter(csq_reader)
-        csq_index = -1
-        with open_vcf(output, _output_mode(output), header=header) as writer:
-            for index, record in enumerate(reader):
-                record.translate(writer.header)
-                for tag in ANNOTATION_TAGS:  # drop stale values when re-annotating
-                    if tag in record.info:
-                        del record.info[tag]
-                if index in ref_mismatches:
-                    record.info["OMS_REF_MISMATCH"] = True
-                    writer.write(record)
-                    continue
-                csq_record = next(csq_records)
-                csq_index += 1
-                if (csq_record.chrom, csq_record.pos, csq_record.ref) != (
-                    record.chrom,
-                    record.pos,
-                    record.ref,
-                ):
-                    raise RuntimeError(f"csq output out of sync at {record.chrom}:{record.pos}")
-                if "BCSQ" in csq_record.info:
-                    record.info["BCSQ"] = csq_record.info["BCSQ"]
-                record_variants = by_record.get(csq_index)
-                if record_variants:
-                    n_alts = len(record.alts or ())
-                    record.info["OMS"] = tuple(_oms_entry(v) for v in record_variants)
-                    for tag, attr in (("OMS_WT", "wt_marginal"), ("OMS_MM", "masked_marginal")):
-                        values = _per_allele_min(record_variants, n_alts, attr)
-                        if values is not None:
-                            record.info[tag] = values
+    with ExitStack() as stack:
+        reader = stack.enter_context(open_vcf(input_vcf))
+        csq_readers = {
+            code: stack.enter_context(open_vcf(group.csq)) for code, group in sites.groups.items()
+        }
+        first = next(iter(csq_readers.values()))
+        header = _output_header(reader.header, first.header, model_name)
+        csq_records = {code: iter(csq_reader) for code, csq_reader in csq_readers.items()}
+        writer = stack.enter_context(open_vcf(output, _output_mode(output), header=header))
+        for index, record in enumerate(reader):
+            record.translate(writer.header)
+            for tag in ANNOTATION_TAGS:  # drop stale values when re-annotating
+                if tag in record.info:
+                    del record.info[tag]
+            if index in ref_mismatches:
+                record.info["OMS_REF_MISMATCH"] = True
                 writer.write(record)
+                continue
+            csq_record = next(csq_records[sites.code_of(record.chrom)])
+            if (csq_record.chrom, csq_record.pos, csq_record.ref) != (
+                record.chrom,
+                record.pos,
+                record.ref,
+            ):
+                raise RuntimeError(f"csq output out of sync at {record.chrom}:{record.pos}")
+            if "BCSQ" in csq_record.info:
+                record.info["BCSQ"] = csq_record.info["BCSQ"]
+            record_variants = by_record.get(index)
+            if record_variants:
+                n_alts = len(record.alts or ())
+                record.info["OMS"] = tuple(_oms_entry(v) for v in record_variants)
+                for tag, attr in (("OMS_WT", "wt_marginal"), ("OMS_MM", "masked_marginal")):
+                    values = _per_allele_min(record_variants, n_alts, attr)
+                    if values is not None:
+                        record.info[tag] = values
+            writer.write(record)
 
 
 def write_tsv(path: Path, variants: Iterable[ScoredVariant]) -> None:
@@ -470,34 +475,74 @@ class RefMismatch:
     genome_ref: str  # empty if the contig is not in the FASTA
 
 
-def split_ref_mismatches(
-    vcf: Path, fasta: Path, sites_out: Path, max_fraction: float = 0.1
-) -> tuple[int, list[RefMismatch]]:
-    """Copy ``vcf`` to a sites-only file, leaving out records whose REF is not the genome's.
+@dataclass
+class SiteGroup:
+    """Sites-only records that bcftools csq annotates with one genetic code."""
 
-    bcftools csq aborts on the first such record, so they are set aside and reported.
-    Raises ``ReferenceMismatchError`` when more than ``max_fraction`` of the records disagree,
-    which almost always means the VCF was called on a different assembly or uses different
-    chromosome names.
+    sites: Path
+    csq: Path
+    input_indices: list[int] = field(default_factory=list)  # input-VCF ordinal of each record
+
+
+@dataclass
+class SiteGroups:
+    groups: dict[int, SiteGroup]  # genetic code -> group
+    codes: CodeAssignment
+
+    def code_of(self, chrom: str) -> int:
+        return self.codes.csq_code(chrom)
+
+
+def split_sites(
+    vcf: Path, fasta: Path, workdir: Path, codes: CodeAssignment, max_fraction: float = 0.1
+) -> tuple[int, list[RefMismatch], SiteGroups]:
+    """Copy ``vcf`` to sites-only files, one per genetic code, leaving out records whose REF
+    is not the genome's.
+
+    bcftools csq applies one genetic code per run, so records are grouped by the code of
+    their sequence (``codes.csq_code``); a genome with the standard code only gives one group.
+    bcftools csq aborts on the first record whose REF disagrees with the genome, so those
+    are set aside and reported. Raises ``ReferenceMismatchError`` when more than
+    ``max_fraction`` of the records disagree, which almost always means the VCF was called on
+    a different assembly or uses different chromosome names.
     """
     mismatches = []
     n_records = 0
-    with pysam.FastaFile(str(fasta)) as genome, open_vcf(vcf) as reader:
+    groups: dict[int, SiteGroup] = {}
+    with ExitStack() as stack:
+        genome = stack.enter_context(pysam.FastaFile(str(fasta)))
+        reader = stack.enter_context(open_vcf(vcf))
         contigs = set(genome.references)
         reader.subset_samples([])
-        with open_vcf(sites_out, "wb", header=reader.header) as writer:
-            for index, record in enumerate(reader):
-                n_records += 1
-                ref = record.ref.upper()
-                observed = (
-                    genome.fetch(record.chrom, record.start, record.start + len(ref)).upper()
-                    if record.chrom in contigs
-                    else ""
+        writers: dict[int, pysam.VariantFile] = {}
+
+        def writer_for(code: int) -> pysam.VariantFile:
+            if code not in writers:
+                group = SiteGroup(
+                    workdir / f"sites.code{code}.bcf", workdir / f"csq.code{code}.bcf"
                 )
-                if observed != ref:
-                    mismatches.append(RefMismatch(index, record.chrom, record.pos, ref, observed))
-                    continue
-                writer.write(record)
+                groups[code] = group
+                writers[code] = stack.enter_context(
+                    open_vcf(group.sites, "wb", header=reader.header)
+                )
+            return writers[code]
+
+        for index, record in enumerate(reader):
+            n_records += 1
+            ref = record.ref.upper()
+            observed = (
+                genome.fetch(record.chrom, record.start, record.start + len(ref)).upper()
+                if record.chrom in contigs
+                else ""
+            )
+            if observed != ref:
+                mismatches.append(RefMismatch(index, record.chrom, record.pos, ref, observed))
+                continue
+            code = codes.csq_code(record.chrom)
+            writer_for(code).write(record)
+            groups[code].input_indices.append(index)
+        if not groups:  # csq still runs once (it also provides the parsed annotation)
+            writer_for(codes.nuclear or STANDARD)
     if n_records and len(mismatches) > max_fraction * n_records:
         example = mismatches[0]
         raise ReferenceMismatchError(
@@ -516,7 +561,7 @@ def split_ref_mismatches(
         )
     if len(mismatches) > 10:
         log.warning("... %d REF allele mismatches in total", len(mismatches))
-    return n_records, mismatches
+    return n_records, mismatches, SiteGroups(groups, codes)
 
 
 def annotate(
@@ -531,21 +576,37 @@ def annotate(
     model_name: str,
     masked: bool = False,
     threads: int = 0,
+    genetic_code: int | None = None,
+    mito_genetic_code: int | None = None,
 ) -> AnnotationResult:
-    """Annotate missense variants in ``vcf`` with protein language model scores."""
+    """Annotate missense variants in ``vcf`` with protein language model scores.
+
+    ``genetic_code`` / ``mito_genetic_code``: NCBI tables for nuclear / mitochondrial
+    sequences; default: from the GFF3 (see ``omnimissense.genetic_code.CodeAssignment``).
+    """
     fasta = prepare_fasta(fasta)
+    codes = scan_genetic_codes(gff3, genetic_code, mito_genetic_code)
     with tempfile.TemporaryDirectory(prefix="omnimissense-") as tmp:
-        sites = Path(tmp) / "sites.bcf"
-        n_records, ref_mismatches = split_ref_mismatches(vcf, fasta, sites)
-        csq_vcf = Path(tmp) / "csq.bcf"
+        n_records, ref_mismatches, sites = split_sites(vcf, fasta, Path(tmp), codes)
         csq_dump = Path(tmp) / "annotation.gff.gz"
-        log.info("Calling consequences with bcftools csq")
-        messages = run_csq(sites, fasta, gff3, csq_vcf, threads=threads, dump_gff=csq_dump)
-        log.debug("bcftools csq messages:\n%s", messages)
-        _, variants = collect_missense(csq_vcf)
+        variants = []
+        for i, (code, group) in enumerate(sorted(sites.groups.items())):
+            log.info("Calling consequences with bcftools csq (genetic code %d)", code)
+            messages = run_csq(
+                group.sites,
+                fasta,
+                gff3,
+                group.csq,
+                threads=threads,
+                dump_gff=csq_dump if i == 0 else None,
+                genetic_code=code,
+            )
+            log.debug("bcftools csq messages:\n%s", messages)
+            variants += collect_missense(group.csq, group.input_indices)
+        variants.sort(key=lambda v: v.record_index)  # stable: csq order within a record
         log.info("%d records, %d missense consequences", n_records, len(variants))
 
-        transcripts = read_transcripts(gff3, fasta, csq_dump=csq_dump)
+        transcripts = read_transcripts(gff3, fasta, csq_dump=csq_dump, codes=codes)
         needed = {v.consequence.transcript_id for v in variants}
         proteins = build_proteome(fasta, transcripts, needed)
         classify_variants(variants, transcripts, proteins)
@@ -553,7 +614,7 @@ def annotate(
 
         output_vcf.parent.mkdir(parents=True, exist_ok=True)
         mismatch_indices = {m.index for m in ref_mismatches}
-        write_vcf(vcf, csq_vcf, output_vcf, variants, mismatch_indices, model_name)
+        write_vcf(vcf, sites, output_vcf, variants, mismatch_indices, model_name)
     write_tsv(output_tsv, variants)
     return AnnotationResult(
         n_records=n_records, variants=variants, n_ref_mismatches=len(ref_mismatches)
@@ -582,10 +643,13 @@ def precompute(
     scorer_factory: ScorerFactory,
     chunk_size: int = 256,
     progress: bool = True,
+    genetic_code: int | None = None,
+    mito_genetic_code: int | None = None,
 ) -> PrecomputeResult:
     """Compute and cache wild-type marginals for every protein of an annotation."""
     fasta = prepare_fasta(fasta)
-    transcripts = read_transcripts(gff3, fasta)
+    codes = scan_genetic_codes(gff3, genetic_code, mito_genetic_code)
+    transcripts = read_transcripts(gff3, fasta, codes=codes)
     proteins = build_proteome(fasta, transcripts)
     status_counts = Counter(p.status.value for p in proteins.values())
     sequences = {p.seq_hash: p.sequence for p in proteins.values() if p.status is ProteinStatus.OK}

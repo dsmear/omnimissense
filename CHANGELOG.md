@@ -13,6 +13,11 @@
 - Clearer error for GFF3 layouts csq cannot read (GTF, prokaryotic CDS directly under genes),
   with the converters to use.
 - `uv sync` without `--all-groups` no longer breaks test collection (Biopython test skipped).
+- **Genetic codes:** `--genetic-code` and `--mito-genetic-code` (NCBI tables 1–6, 9–16,
+  21–31, 33, as in bcftools csq); by default each sequence's `transl_table` from the GFF3
+  (NCBI), else the standard code for nuclear sequences. Mitochondrial genes are now scored
+  when their code is known (previously always skipped). bcftools csq is run once per code.
+- CLI help now shows the `[default: …]` notes (they were swallowed as rich markup).
 
 ## 0.2.0 — 2026-11-25
 

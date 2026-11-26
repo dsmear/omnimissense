@@ -35,7 +35,9 @@ It outputs the same VCF (all records, all samples) with protein-language-model s
    records are flagged (`OMS_REF_MISMATCH`) and skipped; if more than 10% mismatch, the run
    stops (VCF and FASTA are probably from different assemblies).
 2. **Consequences** are called with [`bcftools csq`](https://samtools.github.io/bcftools/howtos/csq-calling.html)
-   (bundled in pysam, nothing to install), one record at a time, for every ALT allele.
+   (bundled in pysam, nothing to install), one record at a time, for every ALT allele, with
+   the genetic code of each sequence (one csq run per code, see
+   [Genetic codes](#genetic-codes)).
 3. **Proteins** are translated from the FASTA + GFF3, using the transcripts exactly as csq
    parsed them (`--dump-gff`), so both steps always agree on transcripts and coding segments.
    The reference amino acid reported by csq must match the translated protein; mismatches are
@@ -88,6 +90,22 @@ From NCBI, take `<assembly>_genomic.fna.gz` and `<assembly>_genomic.gff.gz` from
 assembly's FTP folder (e.g. `genomes/all/GCF/000/146/045/GCF_000146045.2_R64/` for yeast);
 transcript IDs are then NCBI's (`rna-NM_…`, `rna-XM_…`). The VCF must use the same sequence
 names as the FASTA (NCBI: accessions such as `NC_001133.9`).
+
+### Genetic codes
+
+Proteins are translated, and consequences called, with the
+[NCBI genetic code](https://www.ncbi.nlm.nih.gov/Taxonomy/Utils/wprintgc.cgi) of each
+sequence (the 26 tables bcftools csq has: 1–6, 9–16, 21–31, 33):
+
+| Sequences | Code used |
+|---|---|
+| nuclear (and other non-mitochondrial) | `--genetic-code`, else the GFF3's `transl_table`, else 1 (standard) |
+| mitochondrial (`MT`, `chrM`, … or NCBI `genome=mitochondrion`) | `--mito-genetic-code`, else the GFF3's `transl_table`, else **skipped** |
+
+NCBI writes `transl_table` on the CDS features whenever the code is not the standard one, so
+NCBI annotations need no option (e.g. yeast mitochondria: table 3; bacteria and plastids: 11;
+*Candida*: 12). Ensembl GFF3 files carry no code: pass e.g. `--mito-genetic-code 2` for
+vertebrate mitochondria (3 yeast, 5 invertebrates) or `--genetic-code 6` for ciliates.
 
 ## Precomputed scores
 
@@ -144,9 +162,13 @@ do).
   published peptides for 43,524 / 43,524 transcripts (the only exclusion is one
   selenoprotein, see limitations).
 - **NCBI RefSeq annotation** (`benchmarks/ncbi_translation.py`): yeast *S. cerevisiae* R64
-  (GCF_000146045.2), read without conversion; 6,002 / 6,002 proteins identical to NCBI's
-  translation of the same CDS. The other 25 are 19 mitochondrial transcripts (skipped, see
-  limitations) and 6 ORFs that NCBI itself marks as pseudogenes (internal stop codons).
+  (GCF_000146045.2), read without conversion; 6,021 / 6,021 proteins identical to NCBI's
+  translation of the same CDS, including the 19 mitochondrial ones (yeast mitochondrial code,
+  taken from the GFF3). The other 6 are ORFs that NCBI itself marks as pseudogenes (internal
+  stop codons).
+- **Genetic codes:** the 26 tables are bcftools csq's own (copied from its source), checked
+  against Biopython's NCBI tables and, for every table, against the amino acids csq reports
+  for every codon (`tests/test_genetic_code*.py`).
 - **ProteinGym** (`benchmarks/proteingym.py`): Spearman correlation between scores and
   experimental fitness. Our ESM-2 masked marginals reproduce the values ProteinGym publishes
   for ESM-2 650M; ProteinGym publishes no VESM values.
@@ -241,9 +263,10 @@ What this says:
   (bcftools' `misc/gff2gff.py`, or `gbk2bcfgff` from a GenBank file).
 - Canonical transcripts come from `Ensembl_canonical`, `MANE Select` or `RefSeq Select`
   tags; genes without any tagged transcript get their longest CDS.
-- Mitochondrial transcripts are skipped (sequence named `MT`, `chrM`, …, or an NCBI `region`
-  with `genome=mitochondrion`): mitochondria use a different genetic code and bcftools csq
-  applies a single code to the whole genome.
+- Mitochondrial transcripts whose genetic code is unknown (no `--mito-genetic-code`, no
+  `transl_table` in the GFF3) are skipped and reported (`mitochondrial_skipped`).
+- RNA editing (plant mitochondria and plastids) is not modelled: the protein is translated
+  from the genome sequence.
 - Selenoproteins (a TGA codon read as selenocysteine) look like proteins with an internal
   stop and are skipped (1 transcript in the dog).
 - Consequences are computed one record at a time: two nearby variants on the same haplotype

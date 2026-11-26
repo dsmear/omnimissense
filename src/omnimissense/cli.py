@@ -31,16 +31,51 @@ FastaOption = Annotated[
     typer.Option(exists=True, dir_okay=False, help="Reference genome FASTA (plain, gzip or BGZF)."),
 ]
 Gff3Option = Annotated[
-    Path, typer.Option(exists=True, dir_okay=False, help="Ensembl-style GFF3 annotation.")
+    Path,
+    typer.Option(
+        exists=True, dir_okay=False, help="GFF3 annotation (Ensembl or NCBI RefSeq layout)."
+    ),
+]
+
+
+def _check_genetic_code(value: int | None) -> int | None:
+    from omnimissense.genetic_code import genetic_code
+
+    if value is not None:
+        try:
+            genetic_code(value)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from None
+    return value
+
+
+GeneticCodeOption = Annotated[
+    int | None,
+    typer.Option(
+        "--genetic-code",
+        callback=_check_genetic_code,
+        help="NCBI genetic code (translation table) of the nuclear genome, e.g. 6 ciliates, "
+        "12 Candida, 11 bacteria \\[default: the GFF3's transl_table, else 1 = standard].",
+    ),
+]
+MitoGeneticCodeOption = Annotated[
+    int | None,
+    typer.Option(
+        "--mito-genetic-code",
+        callback=_check_genetic_code,
+        help="NCBI genetic code of the mitochondrial genome, e.g. 2 vertebrates, 3 yeast, "
+        "5 invertebrates \\[default: the GFF3's transl_table; without one, mitochondrial "
+        "transcripts are skipped].",
+    ),
 ]
 CacheOption = Annotated[
     Path | None,
     typer.Option(
-        help="Score cache directory [default: $OMNIMISSENSE_CACHE or ~/.cache/omnimissense]."
+        help="Score cache directory \\[default: $OMNIMISSENSE_CACHE or ~/.cache/omnimissense]."
     ),
 ]
 DeviceOption = Annotated[
-    str | None, typer.Option(help="Torch device, e.g. 'cuda' or 'cpu' [default: auto].")
+    str | None, typer.Option(help="Torch device, e.g. 'cuda' or 'cpu' \\[default: auto].")
 ]
 MaxTokensOption = Annotated[
     int, typer.Option(help="Maximum padded tokens per GPU batch; lower it on out-of-memory errors.")
@@ -109,7 +144,7 @@ def annotate(
         Path, typer.Option("--output", "-o", help="Output VCF (.vcf, .vcf.gz or .bcf).")
     ],
     tsv: Annotated[
-        Path | None, typer.Option(help="TSV summary [default: next to the output VCF].")
+        Path | None, typer.Option(help="TSV summary \\[default: next to the output VCF].")
     ] = None,
     model: ModelOption = DEFAULT_MODEL,
     cache_dir: CacheOption = None,
@@ -123,6 +158,8 @@ def annotate(
     device: DeviceOption = None,
     max_tokens: MaxTokensOption = DEFAULT_MAX_TOKENS,
     threads: Annotated[int, typer.Option(help="Extra bcftools threads.")] = 0,
+    genetic_code: GeneticCodeOption = None,
+    mito_genetic_code: MitoGeneticCodeOption = None,
 ) -> None:
     """Annotate missense variants of a VCF with protein language model scores."""
     from omnimissense.pipeline import annotate as run_annotate
@@ -139,6 +176,8 @@ def annotate(
         model_name=model,
         masked=masked,
         threads=threads,
+        genetic_code=genetic_code,
+        mito_genetic_code=mito_genetic_code,
     )
     typer.echo(f"Records read:            {result.n_records}")
     typer.echo(f"REF allele mismatches:   {result.n_ref_mismatches}")
@@ -156,6 +195,8 @@ def precompute(
     cache_dir: CacheOption = None,
     device: DeviceOption = None,
     max_tokens: MaxTokensOption = DEFAULT_MAX_TOKENS,
+    genetic_code: GeneticCodeOption = None,
+    mito_genetic_code: MitoGeneticCodeOption = None,
 ) -> None:
     """Score every protein of an annotation (wild-type marginals) into the cache."""
     from omnimissense.pipeline import precompute as run_precompute
@@ -165,6 +206,8 @@ def precompute(
         gff3,
         cache=_cache(cache_dir, model),
         scorer_factory=_scorer_factory(model, device, max_tokens),
+        genetic_code=genetic_code,
+        mito_genetic_code=mito_genetic_code,
     )
     typer.echo(f"Coding transcripts:  {result.n_transcripts}")
     for status, count in sorted(result.status_counts.items()):
@@ -190,6 +233,8 @@ def export(
     ] = False,
     device: DeviceOption = None,
     max_tokens: MaxTokensOption = DEFAULT_MAX_TOKENS,
+    genetic_code: GeneticCodeOption = None,
+    mito_genetic_code: MitoGeneticCodeOption = None,
 ) -> None:
     """Write the wild-type-marginal scores of every coding transcript to a Parquet file."""
     from omnimissense.export import export_scores
@@ -202,6 +247,8 @@ def export(
         scorer_factory=_scorer_factory(model, device, max_tokens),
         model_name=model,
         canonical_only=canonical_only,
+        genetic_code=genetic_code,
+        mito_genetic_code=mito_genetic_code,
     )
     typer.echo(f"Transcripts:      {result.n_transcripts}")
     typer.echo(f"Unique proteins:  {result.n_unique_proteins} ({result.n_residues} residues)")
@@ -213,16 +260,19 @@ def proteome(
     fasta: FastaOption,
     gff3: Gff3Option,
     output: Annotated[Path, typer.Option("--output", "-o", help="Output protein FASTA.")],
+    genetic_code: GeneticCodeOption = None,
+    mito_genetic_code: MitoGeneticCodeOption = None,
 ) -> None:
     """Translate all coding transcripts and write the proteins to FASTA."""
     from collections import Counter
 
     from omnimissense.fasta import prepare_fasta
-    from omnimissense.gff import read_transcripts
+    from omnimissense.gff import read_transcripts, scan_genetic_codes
     from omnimissense.proteome import build_proteome, write_fasta
 
     fasta = prepare_fasta(fasta)
-    proteins = build_proteome(fasta, read_transcripts(gff3, fasta))
+    codes = scan_genetic_codes(gff3, genetic_code, mito_genetic_code)
+    proteins = build_proteome(fasta, read_transcripts(gff3, fasta, codes=codes))
     written = write_fasta(proteins.values(), output)
     for status, count in sorted(Counter(p.status.value for p in proteins.values()).items()):
         typer.echo(f"{status:<16} {count}")

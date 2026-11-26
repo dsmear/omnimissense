@@ -14,6 +14,9 @@ import pysam
 import pysam.bcftools
 import pysam.utils
 
+from omnimissense.genetic_code import STANDARD
+from omnimissense.genetic_code import genetic_code as check_genetic_code
+
 _AA_CHANGE = re.compile(r"^(?P<pos>\d+)(?P<ref>[A-Z*]+)>(?P<alt_pos>\d+)(?P<alt>[A-Z*]+)$")
 _DNA_CHANGE = re.compile(r"^(?P<pos>\d+)(?P<ref>[A-Za-z]+)>(?P<alt>[A-Za-z]+)$")
 
@@ -89,6 +92,7 @@ def run_csq(
     output: Path,
     threads: int = 0,
     dump_gff: Path | None = None,
+    genetic_code: int = STANDARD,
 ) -> str:
     """Annotate ``vcf`` with INFO/BCSQ; writes uncompressed BCF if ``output`` ends in .bcf,
     otherwise BGZF-compressed VCF.
@@ -96,7 +100,8 @@ def run_csq(
     Runs in local mode (``-l``: one record at a time, no phasing needed) on all ALT alleles
     regardless of genotypes (``-s -``); sample columns are kept unchanged. With ``dump_gff``,
     the annotation as csq parsed it is also written there (gzip GFF3, ``--dump-gff``).
-    Returns bcftools' log messages.
+    ``genetic_code`` is an NCBI table (``-C``); for the standard code csq keeps its default
+    (table 0: the standard codons, ATG as the only start). Returns bcftools' log messages.
     """
     output_type = "-Ou" if output.suffix == ".bcf" else "-Oz"
     args = ["-f", str(fasta), "-g", str(gff3), "-l", "-s", "-", output_type, "-o", str(output)]
@@ -104,6 +109,9 @@ def run_csq(
         args += ["--threads", str(threads)]
     if dump_gff is not None:
         args += ["--dump-gff", str(dump_gff)]
+    if genetic_code != STANDARD:
+        check_genetic_code(genetic_code)  # csq silently keeps the previous table on bad IDs
+        args += ["-C", str(genetic_code)]
     try:
         pysam.bcftools.csq(*args, str(vcf), catch_stdout=False)
     except pysam.utils.SamtoolsError as exc:

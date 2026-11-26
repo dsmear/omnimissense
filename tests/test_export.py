@@ -50,6 +50,7 @@ def test_export_writes_one_row_per_coding_transcript(
     metadata = read_export_metadata(output)
     assert metadata["model"] == "tiny"
     assert metadata["amino_acid_order"] == "ACDEFGHIKLMNPQRSTVWY"
+    assert metadata["genetic_codes"] == {"default": 1}
 
 
 def test_export_canonical_only(synthetic, gff3, tmp_path, tiny_scorer) -> None:
