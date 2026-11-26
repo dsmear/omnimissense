@@ -5,6 +5,15 @@
 
 **Score missense variants in any species with protein language models, straight from a VCF.**
 
+```bash
+pip install omnimissense        # or: uv tool install omnimissense
+omnimissense doctor             # checks bcftools (bundled), PyTorch, CUDA
+omnimissense annotate --vcf my.vcf.gz --fasta genome.fa.gz --gff3 genes.gff3.gz -o my.oms.vcf.gz
+```
+
+Python ≥ 3.11; a CUDA GPU is strongly recommended (CPU works but is slow). bcftools is bundled
+through pysam: nothing else to install. Full example: [Quick start](#quick-start-dog).
+
 > **Status: alpha.** The pipeline works end to end on Ensembl and NCBI annotations (dog, yeast,
 > *E. coli*: proteomes identical to the reference translations), reproduces published ESM-2
 > results and separates known dog disease variants from common dog variants (see
@@ -77,20 +86,21 @@ FASTA=data/dog/Canis_lupus_familiaris.ROS_Cfam_1.0.dna.toplevel.fa.gz
 GFF3=data/dog/Canis_lupus_familiaris.ROS_Cfam_1.0.116.gff3.gz
 
 # optional, once: score the whole proteome into the cache (default model: VESM 650M)
-uv run omnimissense precompute --fasta $FASTA --gff3 $GFF3
+omnimissense precompute --fasta $FASTA --gff3 $GFF3
 
-uv run omnimissense annotate --vcf my_dogs.vcf.gz --fasta $FASTA --gff3 $GFF3 \
+omnimissense annotate --vcf my_dogs.vcf.gz --fasta $FASTA --gff3 $GFF3 \
     -o my_dogs.omnimissense.vcf.gz          # also writes my_dogs.omnimissense.tsv
 
 # optional: all scores of all coding transcripts in one Parquet file
-uv run omnimissense export --fasta $FASTA --gff3 $GFF3 -o dog_scores.parquet
+omnimissense export --fasta $FASTA --gff3 $GFF3 -o dog_scores.parquet
 
 # optional: every possible missense SNV at genome coordinates (no GPU needed afterwards)
-uv run omnimissense export-variants --fasta $FASTA --gff3 $GFF3 -o dog_snvs.vcf.gz
+omnimissense export-variants --fasta $FASTA --gff3 $GFF3 -o dog_snvs.vcf.gz
 ```
 
 The plain-gzip FASTA distributed by Ensembl is recompressed once to BGZF (`.fa.bgz`) next to
-the original, because random access needs it.
+the original, because random access needs it. From a development clone, prefix the commands
+with `uv run`.
 
 ### Annotating without a GPU
 
@@ -360,16 +370,6 @@ What this says:
 - Scores are raw log-likelihood ratios, not calibrated probabilities of pathogenicity.
 - Viral proteins are scored less reliably than cellular ones (ProteinGym: VESM 0.43 on
   viruses vs 0.47–0.52 elsewhere; alignment-based methods ≈0.47 on viruses).
-
-## Installation
-
-Python ≥ 3.11. A CUDA GPU is strongly recommended (CPU works but is slow); bcftools is
-bundled through pysam, nothing else to install.
-
-```bash
-pip install omnimissense        # or: uv tool install omnimissense
-omnimissense doctor             # bcftools (bundled), PyTorch, CUDA
-```
 
 ## Installation (development)
 
