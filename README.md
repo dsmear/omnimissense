@@ -35,7 +35,7 @@ exist for any sequenced genome:
 |---|---|
 | VCF | the variants (differences from the reference genome) |
 | FASTA | the reference genome sequence |
-| GFF3 | the gene annotation (where genes, exons and coding sequences are): Ensembl, NCBI RefSeq, Prokka or Bakta layout |
+| GFF3 or GTF | the gene annotation (where genes, exons and coding sequences are): Ensembl, NCBI RefSeq, GENCODE, Prokka, Bakta, AUGUSTUS/BRAKER |
 
 It outputs the same VCF (all records, all samples) with protein-language-model scores in the
 `INFO` field, plus a TSV with one row per missense consequence. It can also write the scores
@@ -107,9 +107,10 @@ with `uv run`.
 `export-variants` writes every possible missense SNV of the canonical coding transcripts
 (`--all-transcripts`: all of them) with its score, at genome coordinates, tabix-indexed:
 
-- `.vcf.gz`: one record per SNV with the same `OMS` / `OMS_WT` tags as `annotate`;
+- `.vcf.gz`: one record per SNV with the same `OMS` / `OMS_WT` / `OMS_WT_PCT` tags as
+  `annotate`;
 - `.tsv.gz`: one row per SNV and transcript (`#CHROM POS REF ALT gene transcript canonical
-  protein_variant oms_wt`), for R, pandas or `bcftools annotate -c`.
+  protein_variant oms_wt oms_wt_percentile`), for R, pandas or `bcftools annotate -c`.
 
 Any VCF can then be annotated with bcftools alone, in seconds. Split multi-allelic records
 first (`bcftools annotate` matches one annotation record per VCF record, so without the split
@@ -119,7 +120,7 @@ annotate` with a VCF annotation file needs an indexed input):
 ```bash
 bcftools norm -m -any -Oz -o my_dogs.split.vcf.gz my_dogs.vcf.gz
 bcftools index -t my_dogs.split.vcf.gz
-bcftools annotate -a dog_snvs.vcf.gz -c INFO/OMS,INFO/OMS_WT -Oz -o my_dogs.oms.vcf.gz my_dogs.split.vcf.gz
+bcftools annotate -a dog_snvs.vcf.gz -c INFO/OMS,INFO/OMS_WT,INFO/OMS_WT_PCT -Oz -o my_dogs.oms.vcf.gz my_dogs.split.vcf.gz
 ```
 
 The result is identical to `omnimissense annotate` for SNVs (checked on every SNV of 300
@@ -171,15 +172,28 @@ schema, provenance and limitations.
 |---|---|---|
 | `OMS` | `.` | one entry per missense consequence: `Allele\|Gene\|Transcript\|Canonical\|ProteinPos\|RefAA\|AltAA\|WTMarginal\|MaskedMarginal\|Status` |
 | `OMS_WT` | `A` | lowest (most damaging) wild-type-marginal score across transcripts, per ALT allele |
+| `OMS_WT_PCT` | `A` | proteome-wide percentile of `OMS_WT` (see below); needs `omnimissense precompute` once |
 | `OMS_MM` | `A` | lowest masked-marginal score across transcripts, per ALT allele (only with `--masked`) |
 | `OMS_REF_MISMATCH` | flag | the REF allele does not match the genome; record not annotated |
 | `BCSQ` | `.` | consequences from bcftools csq (all consequence types) |
 
 **TSV columns:** `chrom pos ref alt gene transcript canonical biotype strand protein_pos
-ref_aa alt_aa protein_length n_windows wt_marginal masked_marginal status`
+ref_aa alt_aa protein_length n_windows wt_marginal masked_marginal status wt_percentile`
+
+**Percentiles.** The raw score (a log-likelihood ratio) has no fixed scale. `OMS_WT_PCT` and
+`wt_percentile` give it one: the percent of all possible missense SNVs of the genome's
+canonical transcripts (one value per SNV and transcript) that have a lower (more damaging)
+score. `0.5` means "among the 0.5%
+most damaging missense changes possible in this genome", for any gene, species or model. It
+is a monotone transform of the score, so it changes no ranking. The reference distribution
+is built by `omnimissense precompute` (or `export-variants`) and stored in the cache, keyed
+by the GFF3, the genome and the genetic codes; without it the fields stay empty. A
+percentile within each protein was considered and rejected: it discards what separates
+genes (dog pathogenic variants sit at a median 34th percentile of their own protein, while
+the raw score separates them from common variants with AUROC 0.977).
 
 **Status values:** `ok`, `ref_aa_mismatch` (csq and the translated protein disagree),
-`multi_aa_change` (several residues change), `nonstandard_aa`, `protein_unavailable`
+`multi_aa_change` (the change alters the protein length), `nonstandard_aa`, `protein_unavailable`
 (e.g. internal stop codon), `mitochondrial_skipped` (see limitations), `pseudogene` (CDS
 flagged `pseudo=true` by NCBI: a disrupted gene). Only `ok` rows are scored.
 
@@ -190,15 +204,15 @@ flagged `pseudo=true` by NCBI: a disrupted gene). Only `ok` rows are scored.
 | Wild-type marginals, 650M model fp16 (ESM-2 and VESM have the same size) | ~12,400 residues/s, 1.6 GiB peak VRAM |
 | Whole dog proteome (`precompute`, ESM-2) | 43,092 unique proteins, 26.7 M residues in 36 min; cache 1.4 GB |
 | Masked marginals (`--masked`) | 15–28 positions/s, depending on protein length |
-| Annotate 127,270 dog variants (chr38, 0–5 Mb; 1,689 missense consequences), default settings | 25 s on first run, 12 s when the proteins are cached (1.2 GB RAM) |
+| Annotate 127,270 dog variants (chr38, 0–5 Mb; 1,689 missense consequences), default settings | 13.5 s when the proteins are cached (25 s on a first run with 0.2.0; 1.2 GB RAM) |
 | Same, with `--masked` (ESM-2) | 137 s on first run, 13 s when cached |
-| Proteome translation | ~10 s (after the one-off BGZF conversion of the genome, ~3 min) |
+| Proteome translation (dog) | 22 s (after the one-off BGZF conversion of the genome, ~3 min) |
+| Percentile reference (dog, scores cached) | 50 s for 73.9 M values (`precompute` with nothing left to score: 73 s) |
 | `export-variants`, from cached scores (4 CPU cores, no GPU) | *E. coli* 8.6 M SNVs in 49 s; yeast 19.3 M SNVs in 1–2 min |
 | ProteinGym, all 217 assays, wild-type marginals | ~15 s of GPU per model |
 
-The dog annotation and translation times were measured with version 0.2.0. Since 0.3.0 the
-GFF3 is also parsed by csq and scanned once more (prokaryotic layout, genetic codes); these
-times have not been re-measured.
+Dog annotation, translation and percentile-reference times were measured with the current
+version; the model and `precompute` throughput rows with 0.2.0 (the scoring has not changed).
 
 ## Validation
 
@@ -221,9 +235,11 @@ do).
   taken from the GFF3). The other 6 are ORFs that NCBI itself marks as pseudogenes (internal
   stop codons).
 - **Prokaryote** (same script): *E. coli* K-12 MG1655 (GCF_000005845.2), whose CDS hang
-  directly from genes; 4,297 / 4,297 proteins identical to NCBI's translation (table 11 from
-  the GFF3), including the programmed frameshifts of *prfB*, *dnaX* and *copA*. Not scored:
-  18 NCBI pseudogenes and 3 selenoproteins.
+  directly from genes; 4,300 / 4,300 proteins identical to NCBI's translation (table 11 from
+  the GFF3), including the programmed frameshifts of *prfB*, *dnaX* and *copA* and the 3
+  selenoproteins (selenocysteine from `transl_except`). Not scored: 18 NCBI pseudogenes.
+- **GTF input:** the NCBI GTF of the same yeast assembly gives the same 6,021 / 6,021
+  proteins and identical `annotate` results as its GFF3.
 - **Genome-coordinate export** (`export-variants`): on every possible SNV of all CDS bases of
   300 random transcripts, the exported rows equal `annotate`'s scored consequences (yeast
   955,675 / 955,675, *E. coli* 624,682 / 624,682; same transcripts, positions, amino acids and
@@ -277,6 +293,10 @@ ProteinGym's published scores (ESM-2: masked marginal).
 - Overall VESM would rank 17th of 98 on the ProteinGym leaderboard, level with the best
   single-sequence model (VespaG, 0.458, GPL); the models above it mostly also use protein
   structure and/or alignments.
+- No label leakage, as far as VESM's released training code shows: it is trained on UniProtKB
+  sequences with the ESM models' own scores as targets (no DMS, ClinVar or other experimental
+  labels), and checkpoints are chosen by agreement with the ESM ensemble on held-out human
+  proteins, not on ProteinGym.
 
 **Dog benchmark** (`benchmarks/dog_omia.py`): OMIA dog missense variants mapped to dog
 proteins, against Dog10K missense variants with allele frequency ≥ 5% among 1,872 dogs
@@ -351,25 +371,62 @@ What this says:
 
 ## Limitations
 
-- The GFF3 must describe genes and CDS: Ensembl, NCBI RefSeq, Prokka and Bakta layouts work.
-  CDS that hang directly from a gene or have no parent (prokaryotes, NCBI vertebrate
+- The annotation must describe genes and CDS: Ensembl, NCBI RefSeq, Prokka and Bakta GFF3
+  work; CDS that hang directly from a gene or have no parent (prokaryotes, NCBI vertebrate
   mitochondria) get a transcript feature (`tx-<CDS ID>`), and an embedded `##FASTA`
-  section is ignored, in a normalized copy that bcftools csq reads. GTF must be converted to
-  GFF3 first (e.g. AGAT or gffread).
+  section is ignored, in a normalized copy that bcftools csq reads. GTF (Ensembl, GENCODE,
+  NCBI, AUGUSTUS/BRAKER) is converted to GFF3 the same way, with the stop codon (outside the
+  CDS in GTF) merged back into the CDS; transcript IDs are the GTF's `transcript_id`.
 - Canonical transcripts come from `Ensembl_canonical`, `MANE Select` or `RefSeq Select`
   tags; genes without any tagged transcript get their longest CDS.
 - Mitochondrial transcripts whose genetic code is unknown (no `--mito-genetic-code`, no
   `transl_table` in the GFF3) are skipped and reported (`mitochondrial_skipped`).
 - RNA editing (plant mitochondria and plastids) is not modelled: the protein is translated
   from the genome sequence.
-- Selenoproteins (a TGA codon read as selenocysteine) look like proteins with an internal
-  stop and are skipped (1 transcript in the dog, 3 in *E. coli*).
+- Selenocysteine and pyrrolysine are read from NCBI-style `transl_except` attributes (the
+  residue becomes `U` / `O`; variants elsewhere in the protein are scored, the recoded codon
+  itself is not). Without that attribute (e.g. Ensembl GFF3) a selenoprotein looks like a
+  protein with an internal stop and is skipped (1 transcript in the dog).
 - Consequences are computed one record at a time: two nearby variants on the same haplotype
   that change the same codon are scored separately.
-- Variants changing several residues at once (MNVs) are reported but not scored.
-- Scores are raw log-likelihood ratios, not calibrated probabilities of pathogenicity.
+- A variant changing several residues at once (an MNV over two codons, e.g. `4WL>4CM`) is
+  scored as the sum of its single substitutions, as ProteinGym does for multiple mutants;
+  its percentile places that sum on the single-SNV scale. In-frame insertions and deletions
+  are not scored (csq reports them in `BCSQ`).
+- Scores are raw log-likelihood ratios, not calibrated probabilities of pathogenicity; the
+  percentile gives them a genome-wide scale, not a probability either.
 - Viral proteins are scored less reliably than cellular ones (ProteinGym: VESM 0.43 on
   viruses vs 0.47–0.52 elsewhere; alignment-based methods ≈0.47 on viruses).
+
+## Compatibility
+
+Before 1.0 these are rules the project follows, not yet guarantees; 1.0 will make them
+guarantees.
+
+**Kept stable across 0.x versions** (a change needs a deprecation note in the changelog and a
+new minor version):
+
+- command names and their options: `annotate`, `precompute`, `export`, `export-variants`,
+  `proteome`, `doctor`;
+- VCF `INFO` tags (`OMS`, `OMS_WT`, `OMS_WT_PCT`, `OMS_MM`, `OMS_REF_MISMATCH`) and the order
+  of the 10 fields of an `OMS` entry; new information comes as new tags;
+- TSV columns of `annotate` and `export-variants`: append-only (new columns at the end,
+  existing names and positions unchanged);
+- status values keep their meaning (new ones can be added);
+- the definition of the scores (log-likelihood ratios, wild-type and masked marginals, the
+  long-protein windows).
+
+**Not stable:** the Python API (modules and functions are internal), log messages, and the
+on-disk cache layout. The cache is versioned (`<cache>/v1/…`): a change in how scores are
+computed bumps the version, so an old cache is recomputed, never misread. The percentile
+reference is keyed by the annotation, genome and genetic codes.
+
+**Reproducibility.** Scores depend on the model (with its pinned revision), the genome, the
+annotation, the genetic codes and the omnimissense version; output VCFs record the version and
+the model (`##omnimissenseVersion`, `##omnimissenseModel`), `export` files all of them.
+`pysam` is pinned to the 0.24 series (bcftools 1.24), because omnimissense relies on bcftools
+csq's genetic-code tables and `--dump-gff` format; the pin moves only after the test suite
+passes on a new version.
 
 ## Installation (development)
 

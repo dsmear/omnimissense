@@ -232,5 +232,5 @@ def test_unusable_gff3_is_rejected_with_a_hint(synthetic, tmp_path) -> None:
         tmp_path / "genes_only.gff3",
         ["##gff-version 3", _row("gene", 41, 97, "+", ".", "ID=gene-A;Name=geneA")],
     )
-    with pytest.raises(CsqError, match="GTF to GFF3"):
+    with pytest.raises(CsqError, match="must be converted first"):
         read_transcripts(gff, synthetic.fasta)

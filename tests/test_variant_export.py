@@ -8,7 +8,8 @@ from synthetic import CHROM, GENE_A_CDS, GENE_B_CDS, MT_CHROM, write_synthetic_w
 
 from omnimissense.cache import ScoreCache
 from omnimissense.pipeline import annotate
-from omnimissense.variant_export import cds_positions, export_variants
+from omnimissense.snvs import cds_positions
+from omnimissense.variant_export import export_variants
 
 BASES = "ACGT"
 #: Every CDS base of the synthetic genes (genes A and B on chromosome 1, GM on MT), plus two
@@ -79,6 +80,7 @@ def _annotated(files, tmp_path, scorer, cache):
             v.consequence.transcript_id,
             f"{v.consequence.ref_aa}{v.consequence.protein_pos}{v.consequence.alt_aa}",
             round(v.wt_marginal, 4),
+            round(v.wt_percentile, 3),
         )
         for v in result.variants
         if v.status.value == "ok"
@@ -103,8 +105,10 @@ def test_tsv_export_equals_annotate_on_every_possible_snv(files, tmp_path, tiny_
     with gzip.open(output, "rt") as handle:
         assert handle.readline().startswith("#CHROM\tPOS\tREF\tALT")
         for line in handle:
-            chrom, pos, ref, alt, _gene, tid, _canonical, change, score = line.split("\t")
-            exported.add((chrom, int(pos), ref, alt, tid, change, round(float(score), 4)))
+            chrom, pos, ref, alt, _gene, tid, _canonical, change, score, pct = line.split("\t")
+            exported.add(
+                (chrom, int(pos), ref, alt, tid, change, round(float(score), 4), float(pct))
+            )
     annotation, annotated = _annotated(files, tmp_path, tiny_scorer, cache)
     assert annotation.status_counts.keys() == {"ok"}
     assert exported == annotated
@@ -140,13 +144,18 @@ def test_vcf_export_reproduces_annotate_info_tags(files, tmp_path, tiny_scorer) 
                 value = record.info.get("OMS_WT", (None,) * len(record.alts))[i]
                 if value is not None:
                     entries = sorted(e for e in record.info["OMS"] if e.startswith(f"{alt}|"))
-                    expected[(record.chrom, record.pos, alt)] = (round(value, 4), entries)
+                    pct = round(record.info["OMS_WT_PCT"][i], 3)
+                    expected[(record.chrom, record.pos, alt)] = (round(value, 4), pct, entries)
     observed = {}
     with pysam.VariantFile(str(output)) as reader:
         assert reader.index is not None or (output.with_suffix(".gz.tbi")).exists()
         for record in reader:
             key = (record.chrom, record.pos, record.alts[0])
-            observed[key] = (round(record.info["OMS_WT"][0], 4), sorted(record.info["OMS"]))
+            observed[key] = (
+                round(record.info["OMS_WT"][0], 4),
+                round(record.info["OMS_WT_PCT"][0], 3),
+                sorted(record.info["OMS"]),
+            )
     assert observed == expected
 
 

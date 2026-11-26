@@ -76,3 +76,20 @@ def test_padded_alleles_and_mixed_multiallelic_sites_are_matched(synthetic, tmp_
     assert found[(45, "G" + r45[1])] == "TXA:K2R"
     assert found[(82, "T" + r82[1])] == "TXA:W4C"
     assert (82, r82[0]) not in found  # the deletion is a frameshift, not missense
+
+
+def test_consecutive_csq_runs_do_not_share_state(synthetic, tmp_path) -> None:
+    # In-process, csq remembered the last position of the previous run and rejected a run
+    # starting before it on the same sequence ("the file is not sorted").
+    from synthetic import GENOME
+
+    fasta = prepare_fasta(synthetic.fasta)
+    header = (
+        "##fileformat=VCFv4.2\n##contig=<ID=1>\n#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n"
+    )
+    for name, pos in (("late", 190), ("early", 45)):
+        ref = GENOME[pos - 1]
+        alt = "A" if ref != "A" else "C"
+        vcf = tmp_path / f"{name}.vcf"
+        vcf.write_text(header + f"1\t{pos}\t.\t{ref}\t{alt}\t.\t.\t.\n")
+        run_csq(vcf, fasta, synthetic.gff3, tmp_path / f"{name}.out.vcf.gz")

@@ -320,3 +320,42 @@ def prokaryote_gff3_lines(style: str = "ncbi") -> list[str]:
     if style == "prokka":
         lines += ["##FASTA", f">{CHROM}", GENOME]
     return lines
+
+
+def gtf_lines(*, with_parents: bool = True) -> list[str]:
+    """Genes A and B as GTF 2.2 (Ensembl style): CDS without the stop codon, separate
+    ``stop_codon`` features. ``with_parents=False`` drops gene/transcript lines (AUGUSTUS)."""
+
+    def row(ftype: str, start: int, end: int, strand: str, frame: str, attrs: str) -> str:
+        return "\t".join([CHROM, "test", ftype, str(start), str(end), ".", strand, frame, attrs])
+
+    a = 'gene_id "GA"; transcript_id "TXA"; gene_name "GENEA"; gene_biotype "protein_coding";'
+    a += ' transcript_biotype "protein_coding";'
+    b = 'gene_id "GB"; transcript_id "TXB"; gene_name "GENEB"; gene_biotype "protein_coding";'
+    b += ' transcript_biotype "protein_coding";'
+    lines = []
+    if with_parents:
+        lines += [
+            row("gene", 41, 97, "+", ".", 'gene_id "GA"; gene_name "GENEA";'),
+            row("transcript", 41, 97, "+", ".", a + ' tag "basic"; tag "Ensembl_canonical";'),
+        ]
+    lines += [
+        row("exon", 41, 47, "+", ".", a),
+        row("CDS", 41, 47, "+", "0", a),
+        row("exon", 78, 97, "+", ".", a),
+        row("CDS", 78, 94, "+", "2", a),
+        row("stop_codon", 95, 97, "+", "0", a),
+    ]
+    if with_parents:
+        lines += [
+            row("gene", 138, 194, "-", ".", 'gene_id "GB"; gene_name "GENEB";'),
+            row("transcript", 138, 194, "-", ".", b + ' tag "basic";'),
+        ]
+    lines += [
+        row("exon", 184, 194, "-", ".", b),
+        row("CDS", 184, 194, "-", "0", b),
+        row("exon", 138, 153, "-", ".", b),
+        row("CDS", 141, 153, "-", "1", b),
+        row("stop_codon", 138, 140, "-", "0", b),
+    ]
+    return lines

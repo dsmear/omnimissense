@@ -283,7 +283,7 @@ protein → writes them to the VCF `INFO` field.
 | **Result, VESM 650M wild-type marginal, all 217 assays** (run by the user on the RTX 3070, 2026-11-26) | Overall (by function) **0.457** (ESM-2 650M published 0.414; VESM − ESM-2 +0.043, 95% CI +0.024 to +0.063). Human 0.474 (+0.017, +0.001 to +0.034); other eukaryotes 0.517 (+0.031, −0.022 to +0.090); prokaryotes 0.481 (+0.023, −0.005 to +0.057); **viruses 0.426** (+0.165, +0.100 to +0.231). Same assays, published: GEMME 0.455 / 0.469 / 0.516 / 0.467 / 0.472; TranceptEVE L 0.456 / … / 0.461; VenusREM 0.518 / 0.529 / 0.582 / 0.549 / 0.492. Leaderboard position: overall 17th of 98 (human 14th, other eukaryotes 26th, prokaryotes 25th, viruses 21st); best published single-sequence model VespaG 0.458 (viruses: VESPA 0.443). |
 | Interpretation | For cellular organisms the model does not degrade away from human: eukaryotic and prokaryotic proteins score at least as well as human ones, on par with alignment-based methods. Viruses remain the weakest taxon but VESM recovers most of ESM-2's deficit. |
 | ESM-2 650M wild-type marginal, all 217 assays (user's GPU; per-assay files pushed by the user, `benchmarks/results/proteingym_all_{vesm,esm2}_650m*.tsv`) | Overall 0.418, human 0.458, other eukaryotes 0.519, prokaryotes 0.464, viruses 0.260; vs published ESM-2 masked +0.008 overall (−0.002 to +0.018): scoring mode makes little difference for ESM-2, and our implementation agrees with ProteinGym's. **VESM − ESM-2, same scoring, paired by protein:** all +0.036 (+0.021 to +0.052), human +0.017 (+0.003 to +0.030), other eukaryotes −0.001 (−0.029 to +0.025), prokaryotes +0.017 (−0.004 to +0.040), **viruses +0.167 (+0.103 to +0.230)**, VESM better on 25 of 31 viral assays. The virus gain is the model's. Wild-type marginals for all 217 assays: about 15 s of GPU time per model. |
-| Caveats | (1) Resolved: see the ESM-2 wild-type row. (2) Not checked here whether VESM's training or model selection used ProteinGym data (its authors evaluate on ProteinGym); the dog benchmarks are independent evidence. (3) DMS fitness is a proxy for "damaging", not for disease. |
+| Caveats | (1) Resolved: see the ESM-2 wild-type row. (2) Checked later (see "VESM training data" below): no ProteinGym or other experimental labels in VESM's training or checkpoint selection. (3) DMS fitness is a proxy for "damaging", not for disease. |
 
 ---
 
@@ -310,3 +310,73 @@ protein → writes them to the VCF `INFO` field.
 | `pysam>=0.24.1,<0.25` | pysam 0.24.1 (the latest, 2026-09-07) bundles bcftools 1.24: the genetic-code tables are copied from its `csq.c`, the `--dump-gff` format and the empty-VCF crash workaround were checked on it. A future pysam with another bcftools could change any of them silently for users (the CI tests would catch it, users would not). The bound moves after re-running the tests on the new version. |
 | Release checks | `uv lock` changes only the version and the pysam specifier (no dependency upgrades). `uv build`: wheel and sdist contain all modules (including `genetic_code.py`, `variant_export.py`), README and LICENSE; `twine check` passes for both; the wheel installed in a separate environment reports 0.3.0, `doctor` sees bcftools 1.24 (pysam 0.24.1), and `proteome` on *E. coli* gives the benchmark's numbers (4,297 ok, 3 internal stop, 18 pseudogene). 183 tests pass. |
 | Not tagged | Pushing tag `v0.3.0` publishes to PyPI (release workflow, trusted publishing): the user tags after the pull request is merged. |
+
+---
+
+## 2026-11-26 — Score presentation: proteome-wide percentile
+
+| Decision | Rationale |
+|---|---|
+| Add a **proteome-wide percentile** next to the raw score (`OMS_WT_PCT`, `wt_percentile`, `oms_wt_percentile`): percent of all possible missense SNVs of the canonical transcripts of the genome annotation with a lower score | The raw LLR has no fixed scale (it differs between models and is hard to read). The percentile is a monotone transform: no ranking or AUROC changes, but "among the 0.5% most damaging missense changes possible in this genome" reads the same for every gene, species and model. Reference set = exactly the SNVs `export-variants` writes by default (missense only, codon-level rules of csq). |
+| Rejected: a percentile **within each protein** | Dog benchmark (Phase 4b): pathogenic variants sit at a median 34th percentile of their own protein (VESM), 0% in the protein's most damaging 10%, while the raw score separates them from common variants with AUROC 0.977. A per-protein scale discards what separates damaging-in-essential-genes from damaging-anywhere. |
+| Storage: a quantile table (10,901 levels: 1e-5 steps below 1%, 1e-4 above) in `<cache>/v1/<model>/reference/<key>.npz`; key = SHA-256 of the GFF3 bytes, the genome's sequence names and lengths, the genetic codes and a reference version | Small (≈ 175 kB) and exact enough (tests: within 0.002 percentage points of the exact rank below the 1st percentile, 0.02 elsewhere). A different annotation, genome or code never reuses the wrong reference. |
+| Built by `precompute` (after scoring) and by `export-variants` if missing; `annotate` only reads it, and leaves the fields empty with a warning when it is absent | Building needs every canonical protein's scores; `annotate` normally scores only the proteins of the VCF. |
+| Formats: new INFO tag and new **last** TSV column; existing fields, columns and the `OMS` entry layout unchanged | Additive change, safe for existing parsers (pre-1.0 rule: add, do not change). |
+| Check on yeast R64 (tiny model, cached scores) | Reference from 19.4 M SNVs in 31 s, peak RSS 1.3 GB (with the model). On 955,675 random coding SNVs: median percentile 50.0 and 1.00% below the 1st percentile, as expected for random SNVs; `bcftools annotate` with the exported VCF reproduces `OMS_WT` and `OMS_WT_PCT` exactly (945,891 SNVs). Dog (73.8 M SNVs) expected ≈ 2 min. |
+| Code: the SNV enumeration moved from `variant_export.py` to `snvs.py` | Shared by the export and the reference without an import cycle. |
+
+---
+
+## 2026-11-26 — Selenocysteine; csq state between calls
+
+| Decision / finding | Rationale |
+|---|---|
+| Read `transl_except` (NCBI) on CDS features: `aa:Sec` → `U`, `aa:Pyl` → `O` at the codon's position; other values (e.g. `TERM`) ignored | Checked first how csq handles a selenoprotein (*E. coli* fdhF, Sec at residue 140): it ignores `transl_except`, calls a change of the Sec codon `stop_lost` (`140*>140L`), and calls the variants after it as ordinary missense with continued numbering (`456T>456I`). So reading the codon as `U` makes the whole protein scorable and consistent with csq; the `U` residue itself is never scored (not one of the 20 amino acids; csq does not call it missense). ESM has `U` and `O` tokens. |
+| Results | *E. coli*: 4,300 / 4,300 proteins identical to NCBI's translated CDS (fdhF, fdnG, fdoG now included). Every SNV of the 3 selenoproteins: 18,107 missense consequences, all `ok`, identical between `annotate` and `export-variants`, none at the Sec residue. Yeast unchanged (6,021 / 6,021). The dog's selenoprotein stays skipped: the Ensembl GFF3 has no `transl_except` (support for Ensembl's own representation, if any, not checked). |
+| **Bug found and fixed:** bcftools csq keeps state between calls in one Python process | Found by a test: after a csq call whose last record was at position 16, a call with a record at position 10 on the same sequence failed with "The file is not sorted, 1:16 comes before 1:10", even after an intermediate call on an empty VCF. Same family as the genetic-code table that survived between calls. Real-world risk: `annotate` runs csq once per genetic code, so a mitochondrion listed before other contigs (with variants on those contigs) could fail; repeated API calls (benchmarks) too. Each csq call now runs in a fresh `python -c` process (≈ 45 ms; the test suite goes from 2 s to 6 s). Regression test added. E. coli export-vs-annotate check rerun after the change: identical. |
+
+---
+
+## 2026-11-26 — GTF input
+
+| Decision | Rationale |
+|---|---|
+| GTF converted to GFF3 inside `prepare_annotation` (`gtf_to_gff3`), detected from the attributes (`key "value";`) | AUGUSTUS/BRAKER, the usual annotators of new non-model genomes, write GTF, and Ensembl/GENCODE/NCBI also publish GTF; csq reads only GFF3. The converted file then goes through the same path (orphan CDS, codes, csq, dump, metadata). |
+| Genes and transcripts are created from `gene_id`/`transcript_id` (spans from their features) when the GTF has no `gene`/`transcript` lines; IDs are the GTF's | AUGUSTUS GTF often has only exon/CDS lines. |
+| `stop_codon` features merged into the CDS (adjacent or overlapping intervals joined), phases recomputed from the 5'-most CDS phase | GTF 2.2 CDS exclude the stop codon; GFF3 CDS include it. Merging makes GTF and GFF3 of the same genes identical (checked on the synthetic genome: same CDS segments, proteins and `annotate` results on both strands). A stop codon split over two exons stays a separate segment with its phase. |
+| Kept: gene name (`gene_name`, else `gene`), biotypes (`gene_biotype`/`gene_type`, `transcript_biotype`/`transcript_type`; NCBI's `mRNA` → `protein_coding`), transcript `tag`s (canonical), CDS `transl_table`, `transl_except`, `pseudo`, `protein_id` | Everything downstream reads. |
+| Real GTF: yeast R64 NCBI `GCF_000146045.2_R64_genomic.gtf.gz` (downloaded by the user): CDS without stop, separate `stop_codon`, `transl_table "3"` on the 50 mitochondrial CDS, `pseudo` on 6, `unassigned_transcript_…` IDs for the mitochondrial genes | **6,021 / 6,021 proteins identical** to NCBI's translated CDS (19 mitochondrial with table 3 from the GTF), 6 pseudogenes, 0 unmatched — the same as the GFF3. `annotate` on the 1,519 random coding SNVs: identical positions, amino acids, statuses and scores with GTF and GFF3 (1,157 `ok`, 2 `pseudogene`). `locus_tag` added to the CDS attributes kept from a GTF (the NCBI check matches pseudo CDS by it). |
+
+---
+
+## 2026-11-26 — Multi-residue changes (MNVs)
+
+| Decision | Rationale |
+|---|---|
+| Score an equal-length multi-residue missense change as the **sum of its single substitutions** (wild-type and masked marginals), skipping unchanged residues; every reference residue must match the protein | Checked how csq reports MNVs: one within a codon is an ordinary single change (`80TG>AC` → `4W>4T`, already scored); one over two codons is `82GC>TA` → `4WL>4CM`, previously `multi_aa_change` and unscored. The additive score is ProteinGym's convention for multiple mutants with single-sequence models, the one `benchmarks/proteingym_all.py` uses (1.77 M multiple mutants in the 217 assays). |
+| `multi_aa_change` now only for changes of protein length; in-frame indels stay unscored | csq calls in-frame indels `inframe_deletion`/`inframe_insertion`, not missense, so they never reach scoring; comparing sequences of different lengths is a different problem. |
+| The percentile of an MNV is the summed score placed on the single-SNV reference | Kept for ranking convenience; documented as an approximation (the reference holds single SNVs). |
+| Test: the synthetic MNV `4WL>4CM` gives exactly W4C + L5M (wild-type and masked) | |
+
+---
+
+## 2026-11-26 — VESM training data vs ProteinGym (leakage check)
+
+| Finding | Source |
+|---|---|
+| VESM is trained on **UniProtKB sequences** (human `UPh` and non-human `UPnh` sets) with **targets produced by the ESM models themselves**: the minimum/aggregated log-likelihood ratios of a pool of 11 ESM models (round 1 `esmin`, then rounds on human and non-human data), and finally distillation from VESM_3B's LLRs. No DMS, ClinVar, AlphaMissense or other experimental labels appear in the training code or configs. | `ntranoslab/vesm` repository, commit `86d8bc7` (2025-10-15): `README.md`, `train.py`, `configs/*.json`, `data/data_generation.ipynb` (reads `UniProtKB_meta_data.pkl`, writes `ESM11_UniProt_min.pkl`) |
+| **Checkpoint selection** uses an unsupervised proxy: Spearman correlation with the ESM-ensemble average (`esm11_avg`) on held-out human UniProt proteins (`ESM11_UPh_base_val.pkl`), minus 0.1 × the correlation with the base model. ProteinGym and ClinVar appear only in `inference.py` (evaluation). | `modelling/EsmCoDistiller.py` (`eval_epoch`), `train.py` |
+| Not verifiable here: whether design choices (number of rounds, aggregation, thresholds, hyperparameters) were tuned by looking at benchmark results; the paper (Nature Methods 2026, doi:10.1038/s41592-026-03050-9) is not reachable from the container. ProteinGym proteins are surely among the UniProtKB training sequences, without labels — as for ESM-2 (UniRef) and every protein language model. | |
+| Conclusion | Our ProteinGym-by-taxon numbers are not inflated by label leakage, as far as the released code shows. The dog benchmarks (OMIA, Dog10K) remain the fully independent evidence. |
+
+---
+
+## 2026-11-26 — Cache lookups and the dog percentile reference
+
+| Finding / decision | Rationale |
+|---|---|
+| Dog `precompute` with every protein cached, building only the percentile reference, took **9 min 20 s** (user's machine); expected ≈ 2 min from yeast (19.4 M values in 31 s). The reference held 73,901,519 values = exactly the export's rows (SNV × transcript), as designed (an SNV in two overlapping canonical transcripts counts once per transcript); the docs now say so. | |
+| Cause, measured: every `get_wt` call read about half of **every** cache file, whatever the number of proteins asked for: 224 ms for one protein on a 32-file cache (~7 ms per file), and the reference read the cache once per sequence (dog: hundreds of scaffolds × ~170 files). Row-group min/max pruning (Phase 2) cannot skip anything: hashes are random, so a row group of 128 sorted hashes spans almost the whole range. | The Phase 2 RAM fix (5.8 → 1.4 GB) came from reading row groups instead of whole files, not from skipping them. |
+| Fix: an in-memory index `seq_hash → {(file, row group)}`, built from the `seq_hash` column only (0.03 s on yeast) and extended with new files; lookups read only the row groups that hold the requested hashes. Plus batching: the reference and `export-variants` read scores per batch of sequences (≤ 2 M residues) instead of per sequence. | Yeast cache (32 files): one protein 224 → 16 ms, 2,000 proteins 3.69 → 0.63 s, identical values; reference build 31 → 9 s. **Dog (user's machine): reference 9 min 20 s → 50 s** (same 73,901,519 values; `precompute` with nothing to score 73 s). |
+| Dog, other timings with the 0.3.0+ code (user's machine): `proteome` 21.6 s (0.2.0: ~10 s; csq now parses the GFF3 too, plus the extra scan) | |
+| Dog re-timed with the current code (user's machine, RTX 3070): `annotate` on the chr38 demo (127,270 records) 13.5 s with cached proteins (0.2.0: 12 s), 1,689 missense consequences all `ok` as before, percentiles present (e.g. LLR −0.73 → 99.8th percentile: common Ensembl variants are mostly benign); `proteome` 22 s. README performance table updated. | |

@@ -40,6 +40,10 @@ CANONICAL_TAGS = frozenset({"Ensembl_canonical", "MANE Select", "RefSeq Select"}
 #: NCBI names sequences by accession (e.g. ``NC_001224.1``), so the name alone is not enough.
 _MITOCHONDRIAL_GENOMES = frozenset({"mitochondrion"})
 
+#: ``transl_except`` amino acids that omnimissense reads (others, e.g. ``TERM``, are ignored).
+_RECODED = {"Sec": "U", "Pyl": "O"}
+_TRANSL_EXCEPT = re.compile(r"\(pos:(?:complement\()?(\d+)\.\.(\d+)\)?,aa:(\w+)\)")
+
 #: ID prefixes of the Ensembl layout, which csq strips.
 _ID_PREFIXES = ("gene:", "transcript:")
 
@@ -77,6 +81,9 @@ class Transcript:
     #: The GFF3 gives the 5'-most CDS a non-zero phase (the CDS starts inside a codon).
     #: csq's dump trims that partial codon and resets the phase, so it is kept here.
     incomplete_5prime: bool = False
+    #: Codons read as a non-standard amino acid (GFF3 ``transl_except``): genome start, end
+    #: and letter, e.g. selenocysteine ``U`` at a TGA, pyrrolysine ``O`` at a TAG.
+    recoded: list[tuple[int, int, str]] = field(default_factory=list)
     cds: list[CdsSegment] = field(default_factory=list)
 
     def cds_in_transcript_order(self) -> list[CdsSegment]:
@@ -220,6 +227,155 @@ class Annotation:
     n_added_transcripts: int = 0
 
 
+_GTF_ATTRIBUTE = re.compile(r'(\w+)\s+(?:"([^"]*)"|([^;\s]+))')
+#: CDS attributes carried over from a GTF file (used downstream: genetic code, recoding).
+_GTF_CDS_KEYS = ("transl_table", "transl_except", "pseudo", "protein_id", "locus_tag")
+
+
+def is_gtf(path: Path) -> bool:
+    """True if the first feature line has GTF attributes (``key "value";``)."""
+    with open_text(path) as handle:
+        for line in handle:
+            if line.startswith("#") or not line.strip():
+                continue
+            columns = line.rstrip("\n").split("\t")
+            return len(columns) == 9 and bool(re.match(r'\s*\w+ "', columns[8]))
+    return False
+
+
+def _gtf_attributes(text: str) -> dict[str, list[str]]:
+    values: dict[str, list[str]] = defaultdict(list)
+    for key, quoted, bare in _GTF_ATTRIBUTE.findall(text):
+        values[key].append(quoted if quoted or not bare else bare)
+    return values
+
+
+@dataclass
+class _GtfFeature:
+    seqid: str
+    strand: str
+    start: int
+    end: int
+    attributes: dict[str, str] = field(default_factory=dict)
+
+    def extend(self, start: int, end: int) -> None:
+        self.start, self.end = min(self.start, start), max(self.end, end)
+
+
+def _merge_cds(
+    segments: list[tuple[int, int, int | None]], strand: str
+) -> list[tuple[int, int, int]]:
+    """CDS plus stop-codon segments merged (adjacent or overlapping), with phases
+    recomputed from the 5'-most segment's phase."""
+    ordered = sorted(segments)
+    merged: list[list[int]] = []
+    for start, end, _phase in ordered:
+        if merged and start <= merged[-1][1] + 1:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    five_prime = ordered[0] if strand != "-" else max(ordered, key=lambda s: s[1])
+    first_phase = five_prime[2] or 0
+    in_order = merged if strand != "-" else merged[::-1]
+    result, length = [], 0
+    for i, (start, end) in enumerate(in_order):
+        phase = first_phase if i == 0 else (3 - (length - first_phase) % 3) % 3
+        result.append((start, end, phase))
+        length += end - start + 1
+    return result
+
+
+def gtf_to_gff3(gtf: Path, output: Path) -> int:
+    """Write a GTF annotation (Ensembl, GENCODE, NCBI, AUGUSTUS/BRAKER) as GFF3 in the layout
+    csq reads: gene -> mRNA/transcript -> exon/CDS, IDs from ``gene_id``/``transcript_id``.
+
+    GTF CDS features leave out the stop codon (GTF 2.2); the ``stop_codon`` features are
+    merged back into the CDS, as in GFF3. Kept: gene name, gene and transcript biotypes,
+    transcript tags (canonical transcripts), and the CDS attributes ``transl_table``,
+    ``transl_except``, ``pseudo`` and ``protein_id``. Returns the number of transcripts.
+    """
+    genes: dict[str, _GtfFeature] = {}
+    transcripts: dict[str, _GtfFeature] = {}
+    gene_of: dict[str, str] = {}
+    exons: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    cds: dict[str, list[tuple[int, int, int | None]]] = defaultdict(list)
+    cds_attributes: dict[str, dict[str, str]] = {}
+    for seqid, _source, feature, start, end, _score, strand, frame, attr_text in _features(gtf):
+        values = _gtf_attributes(attr_text)
+        gene_id = (values.get("gene_id") or [""])[0]
+        transcript_id = (values.get("transcript_id") or [""])[0]
+        begin, finish = int(start), int(end)
+        if gene_id:
+            gene = genes.setdefault(gene_id, _GtfFeature(seqid, strand, begin, finish))
+            gene.extend(begin, finish)
+            for key in ("gene_name", "gene", "gene_biotype", "gene_type"):
+                if key in values and key not in gene.attributes:
+                    gene.attributes[key] = values[key][0]
+        if feature == "gene" or not transcript_id:
+            continue
+        gene_of.setdefault(transcript_id, gene_id or f"gene-{transcript_id}")
+        transcript = transcripts.setdefault(
+            transcript_id, _GtfFeature(seqid, strand, begin, finish)
+        )
+        transcript.extend(begin, finish)
+        for key in ("transcript_biotype", "transcript_type"):
+            if key in values:
+                transcript.attributes["biotype"] = values[key][0]
+        if "tag" in values:
+            tags = set(transcript.attributes.get("tag", "").split(",")) | set(values["tag"])
+            transcript.attributes["tag"] = ",".join(sorted(t for t in tags if t))
+        phase = int(frame) if frame.isdigit() else None
+        if feature == "exon":
+            exons[transcript_id].append((begin, finish))
+        elif feature in ("CDS", "stop_codon"):
+            cds[transcript_id].append((begin, finish, phase if feature == "CDS" else None))
+            if feature == "CDS":
+                kept = cds_attributes.setdefault(transcript_id, {})
+                for key in _GTF_CDS_KEYS:
+                    if key in values and values[key][0]:
+                        kept[key] = ",".join(values[key])
+
+    def row(feature: _GtfFeature, ftype: str, attrs: str, start=None, end=None, phase="."):
+        fields = [feature.seqid, "omnimissense", ftype, str(start or feature.start)]
+        return "\t".join([*fields, str(end or feature.end), ".", feature.strand, phase, attrs])
+
+    by_gene: dict[str, list[str]] = defaultdict(list)
+    for transcript_id, gene_id in gene_of.items():
+        by_gene[gene_id].append(transcript_id)
+    lines = ["##gff-version 3"]
+    for gene_id, transcript_ids in by_gene.items():
+        gene = genes.get(gene_id) or transcripts[transcript_ids[0]]
+        name = gene.attributes.get("gene_name") or gene.attributes.get("gene") or gene_id
+        gene_biotype = gene.attributes.get("gene_biotype") or gene.attributes.get("gene_type")
+        attrs = f"ID={_escape(gene_id)};Name={_escape(name)}"
+        if gene_biotype:
+            attrs += f";biotype={_escape(gene_biotype)}"
+        lines.append(row(gene, "gene", attrs))
+        for transcript_id in transcript_ids:
+            transcript = transcripts[transcript_id]
+            biotype = transcript.attributes.get("biotype") or gene_biotype
+            if not biotype or (biotype == "mRNA" and cds.get(transcript_id)):
+                biotype = "protein_coding" if cds.get(transcript_id) else "transcript"
+            attrs = (
+                f"ID={_escape(transcript_id)};Parent={_escape(gene_id)};biotype={_escape(biotype)}"
+            )
+            if transcript.attributes.get("tag"):
+                attrs += f";tag={_escape(transcript.attributes['tag']).replace('%2C', ',')}"
+            lines.append(row(transcript, "mRNA" if cds.get(transcript_id) else "transcript", attrs))
+            parent = f"Parent={_escape(transcript_id)}"
+            for start, end in sorted(set(exons.get(transcript_id, []))):
+                lines.append(row(transcript, "exon", parent, start, end))
+            if cds.get(transcript_id):
+                extra = "".join(
+                    f";{key}={_escape(value)}"
+                    for key, value in cds_attributes.get(transcript_id, {}).items()
+                )
+                for start, end, phase in _merge_cds(cds[transcript_id], transcript.strand):
+                    lines.append(row(transcript, "CDS", parent + extra, start, end, str(phase)))
+    output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return len(transcripts)
+
+
 def prepare_annotation(
     gff3: Path,
     directory: Path,
@@ -228,6 +384,8 @@ def prepare_annotation(
 ) -> Annotation:
     """Scan ``gff3`` once; write a normalized copy into ``directory`` if csq needs one.
 
+    A GTF file is first converted to GFF3 (``gtf_to_gff3``) in ``directory``.
+
     The scan finds mitochondrial sequences (NCBI ``region`` with ``genome=mitochondrion``),
     each sequence's ``transl_table`` (NCBI writes it on CDS features when the code is not the
     standard one) and CDS features without a transcript. ``genetic_code`` and
@@ -235,6 +393,12 @@ def prepare_annotation(
     features are assumed to come before their children, as in Ensembl, NCBI, Prokka and
     Bakta files.
     """
+    source = gff3
+    if is_gtf(gff3):
+        converted = directory / "annotation.from_gtf.gff3"
+        n_transcripts = gtf_to_gff3(gff3, converted)
+        log.info("%s: GTF converted to GFF3 (%d transcripts)", gff3.name, n_transcripts)
+        gff3 = converted
     mito_seqids = set()
     tables: dict[str, Counter[int]] = defaultdict(Counter)
     genes: dict[str, str] = {}  # gene-type feature ID -> its biotype ("" if none)
@@ -299,7 +463,7 @@ def prepare_annotation(
         annotated[seqid] = table_id
     codes = CodeAssignment(genetic_code, mito_genetic_code, annotated, frozenset(mito_seqids))
     if not orphans and not has_fasta:
-        return Annotation(gff3, gff3, codes)
+        return Annotation(source, gff3, codes)
 
     normalized = directory / "annotation.normalized.gff3"
     _write_normalized(gff3, normalized, genes, orphans)
@@ -310,7 +474,7 @@ def prepare_annotation(
             gff3.name,
             len(orphans),
         )
-    return Annotation(gff3, normalized, codes, len(orphans))
+    return Annotation(source, normalized, codes, len(orphans))
 
 
 def _write_normalized(
@@ -372,7 +536,8 @@ def _write_normalized(
 
 
 def _add_source_attributes(path: Path, transcripts: dict[str, Transcript]) -> dict[str, bool]:
-    """Set biotype, gene name, canonical tag, pseudo flag and 5' completeness from the GFF3.
+    """Set biotype, gene name, canonical tag, pseudo flag, 5' completeness and recoded
+    codons (``transl_except``) from the GFF3.
 
     Returns ``{gene_id: True}`` for genes with a canonical-tagged transcript (coding or not).
     """
@@ -391,6 +556,13 @@ def _add_source_attributes(path: Path, transcripts: dict[str, Transcript]) -> di
                     continue
                 if attributes.get("pseudo") == "true":
                     transcript.pseudo = True
+                for begin, finish, amino_acid in _TRANSL_EXCEPT.findall(
+                    attributes.get("transl_except", "")
+                ):
+                    letter = _RECODED.get(amino_acid)
+                    codon = (int(begin), int(finish), letter)
+                    if letter and codon not in transcript.recoded:
+                        transcript.recoded.append(codon)
                 current = first_cds.get(transcript.transcript_id)
                 if current is None or five_prime < current[0]:
                     first_cds[transcript.transcript_id] = (

@@ -6,15 +6,15 @@ Layout::
     <root>/v1/<model-slug>/masked_marginal/part-*.parquet   seq_hash, position, llr
 
 ``llr`` is a flat list of float32 (``length x 20`` for wild-type marginals, 20 for masked
-marginals; columns in ``AMINO_ACIDS`` order). Files are append-only; rows inside a file are
-sorted by ``seq_hash`` so Parquet row-group statistics can skip most of a file on lookup.
+marginals; columns in ``AMINO_ACIDS`` order). Files are append-only. A lookup reads only the
+row groups that hold the requested hashes, found through an in-memory index of the
+``seq_hash`` column (built on first use, extended with new files).
 The ``v1`` level must be bumped whenever the scoring procedure (e.g. windowing) changes.
 A cache directory must not be written by two processes at the same time.
 """
 
 from __future__ import annotations
 
-import bisect
 import os
 import re
 import uuid
@@ -49,6 +49,8 @@ class ScoreCache:
         self.directory = Path(root) / CACHE_VERSION / _slug(model_name)
         self._wt_dir = self.directory / "wt_marginal"
         self._masked_dir = self.directory / "masked_marginal"
+        # per directory: seq_hash -> {(file, row group)}, and the files already indexed
+        self._indexes: dict[Path, tuple[dict[str, set[tuple[Path, int]]], set[Path]]] = {}
 
     # ------------------------------------------------------------------ helpers
 
@@ -69,35 +71,44 @@ class ScoreCache:
         pq.write_table(table, tmp, row_group_size=128, compression="zstd")
         tmp.rename(final)
 
-    @staticmethod
-    def _read_matching(directory: Path, hashes: set[str]) -> pa.Table | None:
-        """Rows whose ``seq_hash`` is in ``hashes``, reading only candidate row groups.
+    def _locations(self, directory: Path) -> dict[str, set[tuple[Path, int]]]:
+        """Where each ``seq_hash`` is stored: ``{seq_hash: {(file, row group), ...}}``.
 
-        Each file is sorted by ``seq_hash``, so a row group's min/max statistics bound the
-        hashes it can contain: only the row groups that may hold a requested hash are read,
-        which keeps memory use proportional to the result, not to the cache size.
+        Built once per directory from the ``seq_hash`` column only, then extended with the
+        files written since (files are append-only, never modified). Row-group min/max
+        statistics cannot replace it: hashes are random, so every row group spans almost the
+        whole hash range.
         """
+        index, indexed = self._indexes.setdefault(directory, ({}, set()))
+        for path in sorted(directory.glob("*.parquet")):
+            if path in indexed:
+                continue
+            parquet = pq.ParquetFile(path)
+            for group in range(parquet.metadata.num_row_groups):
+                hashes = parquet.read_row_group(group, columns=["seq_hash"]).column(0)
+                for seq_hash in set(hashes.to_pylist()):
+                    index.setdefault(seq_hash, set()).add((path, group))
+            indexed.add(path)
+        return index
+
+    def _read_matching(self, directory: Path, hashes: set[str]) -> pa.Table | None:
+        """Rows whose ``seq_hash`` is in ``hashes``, reading only the row groups that hold
+        them, so time and memory follow the result, not the cache size."""
         if not hashes or not directory.exists():
             return None
-        wanted = sorted(hashes)
-        wanted_array = pa.array(wanted, pa.string())
+        index = self._locations(directory)
+        groups: dict[Path, set[int]] = {}
+        for seq_hash in hashes:
+            for path, group in index.get(seq_hash, ()):
+                groups.setdefault(path, set()).add(group)
+        if not groups:
+            return None
+        wanted = pa.array(sorted(hashes), pa.string())
         tables = []
-        for path in sorted(directory.glob("*.parquet")):
-            parquet = pq.ParquetFile(path)
-            column = parquet.schema_arrow.get_field_index("seq_hash")
-            groups = []
-            for i in range(parquet.metadata.num_row_groups):
-                stats = parquet.metadata.row_group(i).column(column).statistics
-                if stats is None or not stats.has_min_max:
-                    groups.append(i)
-                    continue
-                j = bisect.bisect_left(wanted, stats.min)
-                if j < len(wanted) and wanted[j] <= stats.max:
-                    groups.append(i)
-            if groups:
-                table = parquet.read_row_groups(groups)
-                tables.append(table.filter(pc.is_in(table["seq_hash"], wanted_array)))
-        return pa.concat_tables(tables) if tables else None
+        for path in sorted(groups):
+            table = pq.ParquetFile(path).read_row_groups(sorted(groups[path]))
+            tables.append(table.filter(pc.is_in(table["seq_hash"], wanted)))
+        return pa.concat_tables(tables)
 
     @staticmethod
     def _split_rows(table: pa.Table) -> list[np.ndarray]:

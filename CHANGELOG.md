@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+- **Proteome-wide percentile** of the score: `OMS_WT_PCT` (VCF) and `wt_percentile` (TSV,
+  last column) in `annotate`; `OMS_WT_PCT` and `oms_wt_percentile` in `export-variants`. The
+  percent of all possible missense SNVs of the canonical transcripts with a more damaging
+  score; built once by `precompute` (or `export-variants`) and stored in the cache. Existing
+  fields and columns are unchanged.
+- **Selenocysteine and pyrrolysine** from NCBI `transl_except`: the codon is read as `U` /
+  `O` instead of a stop, so selenoproteins are translated and their variants scored (the
+  recoded codon itself is not; csq calls its changes `stop_lost`). *E. coli*: 4,300 / 4,300
+  proteins identical to NCBI, the 3 selenoproteins included.
+- Fixed: bcftools csq kept state between calls in one process (pysam runs it in-process):
+  a call starting before the last position of the previous call on the same sequence failed
+  with "the file is not sorted" (e.g. a mitochondrion listed before other contigs, or
+  repeated API calls). Each csq call now runs in its own process (≈ 45 ms overhead).
+- **Multi-residue changes** (an MNV over two codons, csq `4WL>4CM`) are scored as the sum of
+  their single substitutions (wild-type and masked), every reference residue checked;
+  previously reported as `multi_aa_change` and not scored. `multi_aa_change` now only means
+  a change of protein length.
+- **GTF annotations** (Ensembl, GENCODE, NCBI, AUGUSTUS/BRAKER) are accepted wherever a GFF3
+  is: converted internally to GFF3, with the stop codon merged back into the CDS and the
+  biotypes, tags and CDS attributes (`transl_table`, `transl_except`, `pseudo`, `locus_tag`)
+  kept. Yeast NCBI GTF: same 6,021 / 6,021 proteins and identical `annotate` results as the
+  GFF3.
+
+- **Faster cache lookups**: an index of where each protein is stored replaces row-group
+  statistics, which could not skip anything (hashes are random, so every row group spans
+  almost the whole range): one protein 224 → 16 ms, 2,000 proteins 3.7 → 0.6 s on a 32-file
+  cache. The percentile reference and `export-variants` also read scores in batches of
+  sequences instead of once per sequence (dog: hundreds of small scaffolds).
+- README: a **Compatibility** section (what stays stable across 0.x versions: commands and
+  options, `INFO` tags and `OMS` layout, append-only TSV columns, status values, score
+  definitions; what does not: Python API, logs, cache layout) and a note that VESM's training
+  uses no ProteinGym or other experimental labels.
+
 ## 0.3.0 — 2026-11-26
 
 Any genome: NCBI and prokaryotic annotations, any genetic code, mitochondria, and a

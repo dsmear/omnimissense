@@ -42,7 +42,14 @@ def _consequence(ref_aa="K", alt_aa="R", pos=2) -> Consequence:
         (_consequence(), Protein("T", "MKR", ProteinStatus.OK), VariantStatus.OK),
         (_consequence(), Protein("T", "MAR", ProteinStatus.OK), VariantStatus.REF_AA_MISMATCH),
         (_consequence(pos=9), Protein("T", "MKR", ProteinStatus.OK), VariantStatus.REF_AA_MISMATCH),
-        (_consequence("KR", "WW"), Protein("T", "MKR", ProteinStatus.OK), VariantStatus.MULTI_AA),
+        # two residues changed (MNV over two codons): scored as the sum of both substitutions
+        (_consequence("KR", "WW"), Protein("T", "MKR", ProteinStatus.OK), VariantStatus.OK),
+        (
+            _consequence("KR", "WW"),
+            Protein("T", "MKA", ProteinStatus.OK),
+            VariantStatus.REF_AA_MISMATCH,
+        ),
+        (_consequence("KR", "K"), Protein("T", "MKR", ProteinStatus.OK), VariantStatus.MULTI_AA),
         (
             _consequence("X", "R"),
             Protein("T", "MXR", ProteinStatus.OK),
@@ -223,6 +230,30 @@ def test_second_run_reads_scores_from_cache(synthetic, tmp_path, tiny_scorer) ->
 def test_no_masked_option(synthetic, tmp_path, tiny_scorer) -> None:
     result, _ = _run(synthetic, tmp_path, tiny_scorer, masked=False)
     assert all(v.masked_marginal is None and v.wt_marginal is not None for v in result.variants)
+
+
+def test_mnv_over_two_codons_scores_the_sum_of_its_substitutions(
+    synthetic, tmp_path, tiny_scorer
+) -> None:
+    # 82-83 "GC" > "TA": codon 4 TGG > TGT (W4C), codon 5 CTG > ATG (L5M); csq: 4WL>4CM
+    vcf = tmp_path / "mnv.vcf"
+    header = "".join(
+        line + "\n" for line in synthetic.vcf.read_text().splitlines() if line.startswith("#")
+    )
+    vcf.write_text(header + "1\t82\t.\tGC\tTA\t.\tPASS\t.\tGT\t0/1\n")
+    result, _cache = _run(synthetic, tmp_path, tiny_scorer, vcf=vcf)
+    [variant] = result.variants
+    assert (variant.consequence.ref_aa, variant.consequence.alt_aa) == ("WL", "CM")
+    assert variant.status is VariantStatus.OK
+    protein = "MKRWLEHC"  # gene A
+    [(matrix, _)] = tiny_scorer.wt_marginals([protein])
+    expected = matrix[3, "ACDEFGHIKLMNPQRSTVWY".index("C")]
+    expected += matrix[4, "ACDEFGHIKLMNPQRSTVWY".index("M")]
+    assert variant.wt_marginal == pytest.approx(expected, abs=1e-5)
+    masked = tiny_scorer.masked_marginals([(protein, 4), (protein, 5)])
+    expected_masked = masked[0]["ACDEFGHIKLMNPQRSTVWY".index("C")]
+    expected_masked += masked[1]["ACDEFGHIKLMNPQRSTVWY".index("M")]
+    assert variant.masked_marginal == pytest.approx(expected_masked, abs=1e-5)
 
 
 def test_ref_allele_mismatch_is_flagged_not_ignored(
